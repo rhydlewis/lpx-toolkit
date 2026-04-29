@@ -1,0 +1,11 @@
+
+    AU Validation Tool
+    Version: 1.10.0  Copyright 2003-2019, Apple Inc. All Rights Reserved.
+
+    Manufacturer String: Audio Unit Type Subtype Manufacturer 4-byte codes:
+aumu EZk2 Toon  -  Toontrack: EZkeys 2     (file:///Library/Audio/Plug-Ins/Components/EZkeys%202.component/) [AUv2]
+aufx Akrc Bgrn  -  Bogren Digital: AmpKnob - RevC     (file:///Library/Audio/Plug-Ins/Components/AmpKnob%20-%20RevC.component/) [AUv2]
+aufx EB   SToy  -  Soundtoys: EchoBoy     (file:///Library/Audio/Plug-Ins/Components/EchoBoy.component/) [AUv2]
+aufx kscp  kHs  -  Kilohearts: kHs Compressor     (file:///Library/Audio/Plug-Ins/Components/kHs%20Compressor.component/) [AUv2]
+aufx bpas appl  -  Apple: AUBandpass     (file:///System/Library/Components/CoreAudio.component/) [AUv2]
+aumu MRSL TCHC  -  Crow Hill: Marshal Brass     (file:///Library/Audio/Plug-Ins/Components/Marshal%20Brass.component/) [AUv2]
