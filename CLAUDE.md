@@ -29,14 +29,20 @@ The fingerprint key format is `f"{type}/{subtype}/{manufacturer}"` — preserve 
 
 User-given track header names (e.g. `Acoustic GTR`, `Ld GTR Low`) live inside Audio Region records in the binary section, not inside `OCuA` channel-strip records. The `gRuA` 4CC (`AuRg` reversed) marks the start of each region; the name is at offset +112, length-prefixed by a uint16 LE at +110.
 
-**The strip mapping is unsolved.** Regions and `OCuA` records sit in non-overlapping byte ranges, and the candidate fields inside `gRuA` records (e.g. the 4-byte value at +50) are not consistent within a track's regions, so they aren't a track-strip key. Tried so far:
+**The strict strip mapping is unsolved.** Regions and `OCuA` records sit in non-overlapping byte ranges, and the candidate fields inside `gRuA` records are not consistent within a track's regions. Tried so far (don't redo without new evidence):
 
 - Region offsets vs OCuA byte ranges — zero overlap
 - 4 bytes immediately preceding the `\x61\xff` marker — varies per region within the same track
 - 4 bytes at `gRuA+50` — varies within a track and doesn't appear inside any OCuA range
-- Nearest preceding `karT` record — too sparse (435 records cover 7M bytes, so all early regions share one parent karT)
+- Bytes 0–80 of the `gRuA` header — only ~12 of 80 vary across records of one track, but those that DO vary aren't found inside any OCuA byte range either
+- Position 28 — looks discriminating at first but resolves to `name_length + 209`, just a length-related field
+- Nearest preceding `karT` record — `karT` is the score-editor "track" (notation metadata) not the channel strip; one huge `karT` range spans most of the file
+- Length-prefixed user-track-name strings inside OCuA byte ranges — only appear inside the *last* OCuA (a project summary record), not inside the strip they belong to
+- The last OCuA range — contains MIDI map names, drum kit labels, etc. but no track-list lookup table
 
-Until that bridge is found, the parser surfaces user-renamed names via `partition_track_names()` as a separate listing. Don't conflate "no mapping yet" with "parser bug" — it's a reverse-engineering task, not a code defect.
+What we ship instead: `cluster_regions()` returns runs of consecutive same-named records (regions of one take folder), and `tracks_from_regions()` collapses them into unique tracks in first-appearance order with region counts. For tracks whose name matches Logic's default channel-strip pattern (`Audio 3`, `Inst 12`...) we annotate the strip; for user-renamed tracks the strip stays unknown. This is the most useful approximation without the bridge.
+
+Don't conflate "no mapping yet" with "parser bug" — it's a reverse-engineering task, not a code defect.
 
 ## Things that look like bugs but aren't
 

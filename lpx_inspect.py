@@ -180,6 +180,73 @@ _AUTO_TRACK_NAME_RE = re.compile(
 )
 
 
+@dataclass
+class RegionCluster:
+    """A run of consecutive region records sharing one base name — i.e. one
+    user-perceived track. base_name is the cleaned form; count is how many
+    records contributed; first/last_offset bracket the byte range."""
+    base_name: str
+    count: int
+    first_offset: int
+    last_offset: int
+
+
+def tracks_from_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
+    """Collapse region records into unique tracks, in first-appearance order.
+
+    Tracks' regions interleave in `ProjectData` once a project gets
+    edit-heavy. Deduping by base name keeps each track once and sums all
+    its regions; first-appearance order is a usable proxy for arrangement
+    order without parsing the (still-unidentified) track-list metadata.
+    """
+    by_name: dict[str, RegionCluster] = {}
+    for offset, raw_name in records:
+        cleaned = _strip_region_suffixes(raw_name)
+        if not _is_user_track_name(cleaned):
+            continue
+        existing = by_name.get(cleaned)
+        if existing is None:
+            by_name[cleaned] = RegionCluster(
+                base_name=cleaned,
+                count=1,
+                first_offset=offset,
+                last_offset=offset,
+            )
+        else:
+            existing.count += 1
+            existing.last_offset = offset
+    return list(by_name.values())
+
+
+def cluster_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
+    """Group consecutive records (in offset order) by their base name.
+
+    Each track's regions are stored contiguously in ProjectData, so a run of
+    consecutive records sharing one base name (after take/comp suffix
+    stripping) corresponds to a single user-perceived track. Records that
+    are recording filenames or bare comp tags are excluded; they don't open
+    a new cluster but also don't break the surrounding one.
+    """
+    clusters: list[RegionCluster] = []
+    current: RegionCluster | None = None
+    for offset, raw_name in records:
+        cleaned = _strip_region_suffixes(raw_name)
+        if not _is_user_track_name(cleaned):
+            continue
+        if current is not None and current.base_name == cleaned:
+            current.count += 1
+            current.last_offset = offset
+        else:
+            current = RegionCluster(
+                base_name=cleaned,
+                count=1,
+                first_offset=offset,
+                last_offset=offset,
+            )
+            clusters.append(current)
+    return clusters
+
+
 def partition_track_names(names: list[str]) -> tuple[list[str], list[str]]:
     """Split track names into (auto_named, user_renamed).
 
@@ -213,14 +280,9 @@ REGION_MARKER_RE = re.compile(rb"\x61\xff" + b"\x00" * 24)
 REGION_NAME_MAX_LEN = 200
 
 
-def find_region_names(raw: bytes) -> list[str]:
-    """Extract user-facing region names from ProjectData binary.
-
-    Each region record carries: <4-byte id> 0x61 0xff <24 zeros> <uint16-LE
-    length> <ascii name>. The name is the same string Logic shows in the
-    track header (regions inherit it from their parent track by default).
-    """
-    names: list[str] = []
+def find_region_records(raw: bytes) -> list[tuple[int, str]]:
+    """Extract (offset, name) pairs for every valid region record."""
+    out: list[tuple[int, str]] = []
     for m in REGION_MARKER_RE.finditer(raw):
         len_off = m.end()
         length = struct.unpack("<H", raw[len_off:len_off + 2])[0]
@@ -229,8 +291,18 @@ def find_region_names(raw: bytes) -> list[str]:
         name_bytes = raw[len_off + 2:len_off + 2 + length]
         if not all(0x20 <= b < 0x7f for b in name_bytes):
             continue
-        names.append(name_bytes.decode("ascii"))
-    return names
+        out.append((m.start(), name_bytes.decode("ascii")))
+    return out
+
+
+def find_region_names(raw: bytes) -> list[str]:
+    """Extract user-facing region names from ProjectData binary.
+
+    Each region record carries: <4-byte id> 0x61 0xff <24 zeros> <uint16-LE
+    length> <ascii name>. The name is the same string Logic shows in the
+    track header (regions inherit it from their parent track by default).
+    """
+    return [name for _, name in find_region_records(raw)]
 
 
 def find_aus(raw: bytes) -> list[AURef]:
@@ -610,15 +682,17 @@ def main(path: str, dump_bplists: bool = False) -> None:
         for fx in t.audio_fx:
             print(f"        Audio FX:   {fmt_au(fx, lookup)}")
 
-    track_names = unique_track_names(find_region_names(raw))
-    auto_named, user_renamed = partition_track_names(track_names)
-    if user_renamed:
+    tracks = tracks_from_regions(find_region_records(raw))
+    if tracks:
         print(
-            f"\n=== USER-RENAMED TRACKS ({len(user_renamed)}) ==="
-            "\n(extracted from region records — strip mapping not yet resolved)"
+            f"\n=== TRACK LIST ({len(tracks)} from region records) ==="
+            "\n(first-appearance order; strip shown when the region name"
+            "\nmatches a default channel-strip pattern)"
         )
-        for n in user_renamed:
-            print(f"  • {n}")
+        for i, t in enumerate(tracks, 1):
+            auto = bool(_AUTO_TRACK_NAME_RE.match(t.base_name))
+            strip = t.base_name if auto else "—"
+            print(f"  {i:>2}. {t.base_name:30s}  strip: {strip:10s}  ({t.count} regions)")
 
     if dump_bplists:
         summarise_bplists(extract_bplists(raw))

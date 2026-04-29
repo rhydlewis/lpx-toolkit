@@ -13,8 +13,10 @@ from pathlib import Path
 import pytest
 
 from lpx_inspect import (
+    cluster_regions,
     find_region_names,
     partition_track_names,
+    tracks_from_regions,
     unique_track_names,
 )
 
@@ -187,6 +189,106 @@ def test_real_project_extraction_yields_unique_named_tracks():
     forbidden = {"Comp A", "Comp B", "Comp C", "Comp D"}
     leaked = forbidden & set(tracks)
     assert not leaked, f"internal tags leaked into output: {leaked}"
+
+
+# --- cluster_regions: group consecutive same-track records ---------------
+
+
+def test_cluster_regions_returns_empty_for_empty_input():
+    assert cluster_regions([]) == []
+
+
+def test_cluster_regions_collapses_consecutive_same_name_records():
+    """Each track's regions are stored contiguously in the file (verified
+    empirically). Consecutive records sharing a base name represent a
+    single track."""
+    records = [(100, "Acoustic GTR"), (200, "Acoustic GTR"), (300, "Acoustic GTR")]
+    clusters = cluster_regions(records)
+    assert len(clusters) == 1
+    assert clusters[0].base_name == "Acoustic GTR"
+    assert clusters[0].count == 3
+    assert clusters[0].first_offset == 100
+    assert clusters[0].last_offset == 300
+
+
+def test_cluster_regions_splits_on_name_change():
+    records = [
+        (100, "Dialogue"),
+        (200, "Dialogue"),
+        (300, "Audio 3"),
+        (400, "Audio 3"),
+    ]
+    clusters = cluster_regions(records)
+    assert [c.base_name for c in clusters] == ["Dialogue", "Audio 3"]
+    assert [c.count for c in clusters] == [2, 2]
+
+
+def test_cluster_regions_strips_take_comp_suffixes_within_cluster():
+    """A cluster of 'Audio 3', 'Audio 3: Comp A', 'Audio 3.1' is one track —
+    the suffixes are take/comp variations, not separate tracks."""
+    records = [
+        (100, "Audio 3"),
+        (200, "Audio 3: Comp A"),
+        (300, "Audio 3.1"),
+    ]
+    clusters = cluster_regions(records)
+    assert len(clusters) == 1
+    assert clusters[0].base_name == "Audio 3"
+    assert clusters[0].count == 3
+
+
+def test_cluster_regions_excludes_recording_filenames():
+    """Recording filenames like 'get busy living_3#09' don't contribute to
+    track clusters."""
+    records = [
+        (100, "Acoustic GTR"),
+        (200, "get busy living_3#09"),
+        (300, "Acoustic GTR"),
+    ]
+    clusters = cluster_regions(records)
+    assert len(clusters) == 1
+    assert clusters[0].base_name == "Acoustic GTR"
+    assert clusters[0].count == 2
+
+
+def test_cluster_regions_excludes_bare_comp_names():
+    records = [
+        (100, "Acoustic GTR"),
+        (200, "Comp A"),
+        (300, "Acoustic GTR"),
+    ]
+    clusters = cluster_regions(records)
+    assert len(clusters) == 1
+    assert clusters[0].base_name == "Acoustic GTR"
+    assert clusters[0].count == 2
+
+
+# --- tracks_from_regions: collapse clusters into unique tracks -------------
+
+
+def test_tracks_from_regions_dedupes_interleaved_clusters():
+    """Regions on different tracks are often interleaved. The unique track
+    list keeps each base name once, in first-appearance order, with the
+    total region count summed across all its clusters."""
+    records = [
+        (100, "Ld GTR Low"),
+        (200, "Middle Lead GTR"),
+        (300, "Ld GTR Low"),
+        (400, "Middle Lead GTR"),
+        (500, "Ld GTR Low"),
+    ]
+    tracks = tracks_from_regions(records)
+    assert [(t.base_name, t.count) for t in tracks] == [
+        ("Ld GTR Low", 3),
+        ("Middle Lead GTR", 2),
+    ]
+    # First-appearance order preserved (Ld GTR Low at 100, Middle at 200)
+    assert tracks[0].first_offset == 100
+    assert tracks[1].first_offset == 200
+
+
+def test_tracks_from_regions_returns_empty_for_empty_input():
+    assert tracks_from_regions([]) == []
 
 
 @pytest.mark.skipif(not _REAL_PROJECT_AVAILABLE, reason="LPX_TEST_PROJECT not set or missing")
