@@ -15,6 +15,8 @@ import pytest
 from lpx_inspect import (
     cluster_regions,
     find_region_names,
+    find_track_header_records,
+    find_track_registry_records,
     partition_track_names,
     tracks_from_regions,
     unique_track_names,
@@ -289,6 +291,125 @@ def test_tracks_from_regions_dedupes_interleaved_clusters():
 
 def test_tracks_from_regions_returns_empty_for_empty_input():
     assert tracks_from_regions([]) == []
+
+
+# --- find_track_header_records: 0x70 0x03 0x01 0x00 marker ----------------
+
+
+def _track_header(name: bytes, idx_byte: bytes = b"\x25") -> bytes:
+    """Synthesise a track-header record fragment.
+
+    Format observed: 0x70 0x03 0x01 0x00 + 4 bytes + 1 index byte + 7 zeros
+    + uint16-LE length + ASCII name + null terminator.
+    """
+    return (
+        b"\x70\x03\x01\x00"
+        + b"\x00\x00\x00\x00"
+        + idx_byte
+        + b"\x00" * 7
+        + len(name).to_bytes(2, "little")
+        + name
+        + b"\x00"
+    )
+
+
+def test_find_track_header_records_extracts_minimal_record():
+    raw = b"\x00" * 16 + _track_header(b"Lead Strings")
+    records = find_track_header_records(raw)
+    assert [name for _, name in records] == ["Lead Strings"]
+
+
+def test_find_track_header_records_skips_logic_internal_noise():
+    """Logic emits its own internal records under the same signature —
+    automation containers, RBA take-folder sequences, the 'Untitled'
+    placeholder. None of these are user-named tracks; filter them."""
+    raw = (
+        _track_header(b"*Automation")
+        + _track_header(b"Pad")
+        + _track_header(b"RBA Sequence")
+        + _track_header(b"Untitled")
+        + _track_header(b"Bells")
+        + _track_header(b"Track Alternatives")
+        + _track_header(b"MIDI Region")
+    )
+    records = find_track_header_records(raw)
+    assert [name for _, name in records] == ["Pad", "Bells"]
+
+
+def test_find_track_header_records_returns_offsets_in_file_order():
+    raw = b"\x00" * 4 + _track_header(b"Pad") + b"\x00" * 32 + _track_header(b"Bells")
+    records = find_track_header_records(raw)
+    assert len(records) == 2
+    assert records[0][1] == "Pad"
+    assert records[1][1] == "Bells"
+    assert records[0][0] < records[1][0]
+
+
+# --- find_track_registry_records: signature-whitelisted track entries ----
+
+
+def _registry_entry(name: bytes, sig: bytes = b"\x22\x12") -> bytes:
+    """Synthesise a generalised track-registry record fragment.
+
+    Format observed: 4 zero bytes + 2-byte signature + 4 zero bytes
+    + 2 control bytes + 2 zero bytes + uint16-LE length + ASCII name.
+    """
+    return (
+        b"\x00" * 4
+        + sig
+        + b"\x00" * 4
+        + b"\x80\x00"
+        + b"\x00" * 2
+        + len(name).to_bytes(2, "little")
+        + name
+    )
+
+
+def test_find_track_registry_records_extracts_with_track_signature():
+    """Signature 22 12 marks MIDI/instrument tracks (Pad, Piano, Bells...)."""
+    raw = b"\x00" * 16 + _registry_entry(b"Lead Strings", sig=b"\x22\x12")
+    records = find_track_registry_records(raw)
+    assert [n for _, n in records] == ["Lead Strings"]
+
+
+def test_find_track_registry_records_skips_bus_signatures():
+    """Signature 24 12 marks audio buses (Vocal Verb, EGTR Verb, etc.) —
+    don't surface those as user tracks."""
+    raw = (
+        _registry_entry(b"Lead Strings", sig=b"\x22\x12")
+        + _registry_entry(b"Vocal Verb",   sig=b"\x24\x12")
+        + _registry_entry(b"Bass",         sig=b"\x22\x12")
+    )
+    names = [n for _, n in find_track_registry_records(raw)]
+    assert names == ["Lead Strings", "Bass"]
+
+
+def test_find_track_registry_records_filters_at_context_name_placeholder():
+    """'@ (=Context Name)' is a Logic UI placeholder under several signatures
+    — never a user track."""
+    raw = (
+        _registry_entry(b"Pad")
+        + _registry_entry(b"@ (=Context Name)")
+        + _registry_entry(b"Bells")
+    )
+    names = [n for _, n in find_track_registry_records(raw)]
+    assert names == ["Pad", "Bells"]
+
+
+def test_find_track_registry_records_recognises_sub_track_signatures():
+    """Sub/folder headers (Dialogue, Keys, Strings & Pads, Percussion) use
+    distinct signatures (74 10, cb 10, e3 11, e4 10, eb 11)."""
+    raw = (
+        _registry_entry(b"Dialogue",            sig=b"\xcb\x10")
+        + _registry_entry(b"Keys",              sig=b"\xe3\x11")
+        + _registry_entry(b"Bells & Synth Keys", sig=b"\xe4\x10")
+        + _registry_entry(b"Percussion",        sig=b"\x74\x10")
+        + _registry_entry(b"Strings & Pads",    sig=b"\xeb\x11")
+    )
+    names = [n for _, n in find_track_registry_records(raw)]
+    assert set(names) == {
+        "Dialogue", "Keys", "Bells & Synth Keys", "Percussion", "Strings & Pads",
+    }
 
 
 @pytest.mark.skipif(not _REAL_PROJECT_AVAILABLE, reason="LPX_TEST_PROJECT not set or missing")

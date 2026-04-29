@@ -44,6 +44,32 @@ What we ship instead: `cluster_regions()` returns runs of consecutive same-named
 
 Don't conflate "no mapping yet" with "parser bug" — it's a reverse-engineering task, not a code defect.
 
+## Track-registry record format
+
+Beyond `gRuA` (audio regions), the binary section of `ProjectData` carries a *track registry* with one entry per Logic track (audio, instrument, sub/folder header). Two extraction paths:
+
+**Track-header records** — fixed signature `\x70\x03\x01\x00`, 18-byte preamble before name. Catches MIDI/instrument tracks Logic emits as track-list entries (Pad, Lead Strings, Bells, etc.). Logic-internal records (`*Automation`, `RBA Sequence`, `Untitled`, `Track Alternatives`) share the signature and are filtered by name.
+
+**Track-registry records** — generalised pattern: `<4 zeros><2-byte signature><4 zeros><2 control bytes><2 zeros><uint16 LE length><name>`. Each track *kind* uses a distinct signature:
+
+| Signature | Kind | Examples |
+|---|---|---|
+| `22 12` | MIDI/instrument | Pad, Piano, Bells, Drums, Bass, Lead Strings |
+| `23 12` | audio (some) | Andy & Red, Red Dialogue, Ld GTR Low, Ld GTR Harm |
+| `dc 11` | audio (some) | Acoustic GTR, Classical GTR |
+| `df 11` | audio | Slide GTR, Intro Lead GTR family, Middle/Outro Lead GTR |
+| `a8 11` | single instrument | Dome Kick |
+| `74 10` | sub / percussion folder | Timpani, Percussion |
+| `cb 10` | sub / dialogue folder | Dialogue |
+| `e3 11` | sub / keys folder | Keys |
+| `e4 10` | sub / bells & synth folder | Bells & Synth Keys |
+| `eb 11` | sub / strings & pads folder | Strings & Pads |
+| `e7 11` | atmosphere / pad-cluster | Atmosphere (Millenniums) |
+
+Bus signatures (`24 12`, `30 11`, `38 11`, `f5 11`) share the outer structure but are filtered out — buses live on the channel-strip side, not the track side.
+
+The 2 *control bytes* (offset −6/−5 from name) appear to encode track properties, but their meaning isn't fully reverse-engineered. Limited evidence suggests the second byte may differ between visible (`48`, `31`, `35`, …) and hidden (`13`) tracks under signature `23 12`, but the sample is too small to call. **Don't rely on these control bytes for visibility detection without ground-truth from a project where hidden tracks are known.**
+
 ## Things that look like bugs but aren't
 
 - **Duplicate / "phantom" plugin entries.** `ProjectData` retains references from undo history and deleted tracks. If a project shows 7 instruments but the user says they only have 5, the extra 2 are real entries — just not currently on any track. This is documented behaviour, not a parser bug.

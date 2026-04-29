@@ -280,6 +280,126 @@ REGION_MARKER_RE = re.compile(rb"\x61\xff" + b"\x00" * 24)
 REGION_NAME_MAX_LEN = 200
 
 
+# Track-header records carry one entry per track (canonical name, MIDI
+# tracks included). They share a 4-byte signature followed by 4 bytes,
+# 1 varying byte (likely a track index), 7 zeros, the uint16-LE name length
+# and the ASCII name terminated by a null. Logic emits its own internal
+# records under the same signature — they're filtered by name below.
+TRACK_HEADER_RE = re.compile(
+    rb"\x70\x03\x01\x00[\s\S]{4}[\s\S]\x00\x00\x00\x00\x00\x00\x00([\s\S]\x00)"
+)
+TRACK_HEADER_NOISE = frozenset({
+    "*Automation",
+    "RBA Sequence",
+    "Untitled",
+    "Track Alternatives",
+    "Track Automation Root Folder",
+    "MIDI Region",
+    "TRASH",
+    # The project file name itself appears in the registry — not a track.
+    # The actual project name passed in is filtered against this at the
+    # output layer (we don't know it here without a path).
+})
+
+
+# Track-registry signatures observed empirically. Each Logic track entry has
+# a 16-byte preamble: 4 zeros + 2-byte signature + 4 zeros + 2 bytes + 2 zeros
+# + 2-byte LE length + ASCII name. Different track *kinds* use different
+# signatures; buses and presets share the same outer structure but with
+# different signatures, so we whitelist only the track ones.
+TRACK_SIGNATURES = frozenset({
+    b"\x22\x12",  # MIDI / instrument tracks
+    b"\x23\x12",  # audio tracks (some)
+    b"\xdc\x11",  # audio tracks (some)
+    b"\xdf\x11",  # audio tracks (Slide GTR / Intro Lead GTR family)
+    b"\xa8\x11",  # single-instrument tracks (Dome Kick)
+    b"\x74\x10",  # sub / percussion folder
+    b"\xcb\x10",  # sub / dialogue folder
+    b"\xe3\x11",  # sub / keys folder
+    b"\xe4\x10",  # sub / bells & synth keys folder
+    b"\xeb\x11",  # sub / strings & pads folder
+    b"\xe7\x11",  # atmosphere / pad-cluster folder
+})
+
+TRACK_REGISTRY_RE = re.compile(
+    rb"\x00\x00\x00\x00([\s\S]{2})\x00\x00\x00\x00[\s\S]{2}\x00\x00([\s\S]\x00)"
+)
+# Names that show up under track signatures but are Logic-internal placeholders
+# or system buses, not user-named tracks.
+TRACK_REGISTRY_NOISE = frozenset({
+    "@ (=Context Name)",
+    "(Folder)",
+    "Not Assigned",
+    "Transform Parameter Set",
+    "Untitled",
+    "Unused",
+    "Click",
+    "MIDI Click",
+    "Master",
+    "Stereo Out",
+    "Preview",
+    "VCA 1",
+})
+
+
+def find_track_registry_records(raw: bytes) -> list[tuple[int, str]]:
+    """Extract (offset, name) pairs from track-registry entries.
+
+    Each Logic track has a registry entry with a 16-byte preamble whose 2-byte
+    signature identifies the track kind. We whitelist signatures that
+    correspond to real user tracks (audio / instrument / sub headers), which
+    excludes buses and preset entries that share the outer structure.
+    """
+    out: list[tuple[int, str]] = []
+    for m in TRACK_REGISTRY_RE.finditer(raw):
+        sig = m.group(1)
+        if sig not in TRACK_SIGNATURES:
+            continue
+        length_lo, length_hi = m.group(2)[0], m.group(2)[1]
+        if length_hi != 0:
+            continue
+        if not 0 < length_lo <= REGION_NAME_MAX_LEN:
+            continue
+        name_off = m.end()
+        nb = raw[name_off:name_off + length_lo]
+        if not all(0x20 <= b < 0x7f for b in nb):
+            continue
+        name = nb.decode("ascii")
+        if name in TRACK_REGISTRY_NOISE:
+            continue
+        out.append((m.start(), name))
+    return out
+
+
+def find_track_header_records(raw: bytes) -> list[tuple[int, str]]:
+    """Extract (offset, name) pairs from track-header records.
+
+    These are emitted once per Logic track and include MIDI/instrument
+    tracks that the audio-region (`gRuA`) parser misses entirely. System
+    records that share the signature (`*Automation`, take-folder
+    `RBA Sequence`, `Untitled` placeholders) are filtered out — they're
+    Logic-internal scaffolding, not user tracks.
+    """
+    out: list[tuple[int, str]] = []
+    for m in TRACK_HEADER_RE.finditer(raw):
+        length_lo, length_hi = m.group(1)[0], m.group(1)[1]
+        if length_hi != 0:
+            continue
+        if not 0 < length_lo <= REGION_NAME_MAX_LEN:
+            continue
+        name_off = m.end()
+        nb = raw[name_off:name_off + length_lo]
+        if not all(0x20 <= b < 0x7f for b in nb):
+            continue
+        if name_off + length_lo >= len(raw) or raw[name_off + length_lo] != 0:
+            continue
+        name = nb.decode("ascii")
+        if name in TRACK_HEADER_NOISE:
+            continue
+        out.append((m.start(), name))
+    return out
+
+
 def find_region_records(raw: bytes) -> list[tuple[int, str]]:
     """Extract (offset, name) pairs for every valid region record."""
     out: list[tuple[int, str]] = []
@@ -682,10 +802,19 @@ def main(path: str, dump_bplists: bool = False) -> None:
         for fx in t.audio_fx:
             print(f"        Audio FX:   {fmt_au(fx, lookup)}")
 
-    tracks = tracks_from_regions(find_region_records(raw))
+    region_records = find_region_records(raw)
+    header_records = find_track_header_records(raw)
+    registry_records = find_track_registry_records(raw)
+    # Project name leaks into the various registries — filter at output time.
+    all_records = [
+        r for r in region_records + header_records + registry_records
+        if r[1] != info.name
+    ]
+    combined = sorted(all_records, key=lambda r: r[0])
+    tracks = tracks_from_regions(combined)
     if tracks:
         print(
-            f"\n=== TRACK LIST ({len(tracks)} from region records) ==="
+            f"\n=== TRACK LIST ({len(tracks)} from region + header + registry records) ==="
             "\n(first-appearance order; strip shown when the region name"
             "\nmatches a default channel-strip pattern)"
         )
