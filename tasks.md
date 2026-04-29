@@ -1,0 +1,118 @@
+# Tasks
+
+Cross-session persistence of the in-flight task list. Mirror this back into the harness's task tracker at session start with TaskCreate; sync any status changes here when commits land.
+
+Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the user's confirmed list. Tasks that are deferred or blocked are clearly tagged.
+
+---
+
+## Pending
+
+### Bet 2 — output composability (next up)
+
+#### #17 JSON output mode `[Bet 2a]`
+
+`--json` flag emits structured project data (tracks, plugins, metadata) for piping into other tools. Same internal model the HTML dashboard will consume. Schema must include: project metadata, per-track strip + plugin chain, phantom plugins, vendor rollup, diagnostics.
+
+#### #18 Auval cache layer with mtime invalidation `[Bet 2b]`
+
+Cache parsed `auval -l` table at `~/.cache/lpx-toolkit/auval.json`. Invalidate when `/Library/Audio/Plug-Ins/Components/` mtime advances. Eliminates the 5–30s cold start that dominates batch-use UX.
+
+### Bet 3 — cross-project use
+
+#### #19 Cross-project rollup `--rollup` `[Bet 3]`
+
+`lpx-inspect ~/Music/Logic/**/*.logicx --rollup` aggregates plugin usage across many projects. Answers "which installed plugins do I actually use?". Depends on JSON output (#17) and cache (#18).
+
+### Distribution + UX polish
+
+#### #20 Rich HTML dashboard output
+
+`--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
+
+#### #21 Homebrew tap + PyPI packaging
+
+Package as installable CLI: `pyproject.toml` `[project.scripts]` entry point, PyPI release workflow, then a Homebrew tap formula. PM identifies Homebrew as "strongest distribution play within the Logic community."
+
+### Feature additions
+
+#### #22 Phantom plugin distinction
+
+Separate plugins on active tracks vs orphans (undo history, deleted tracks). Surface as a dedicated section per the inspector-mockup design. Makes "is this project clean?" a single-glance answer.
+
+#### #23 Vendor rollup
+
+Count plugins per manufacturer 4CC. Per-project summary feeds into the cross-project `--rollup`. Trivial once auval cache is keyed by manufacturer.
+
+#### #24 Extended metadata
+
+Surface sample rate, bundle size, region count, project length, frame rate index. Sample rate is already in `MetaData.plist` (`SampleRate`), region count is `len(unique_track_names())`, size is `os.stat`, length needs computing from event sequence end.
+
+#### #25 Diagnostics warnings
+
+Surface unresolved 4CCs (no auval match), duplicate consecutive FX on same strip, name-truncation flags. Useful "is this safe to open" check before booting Logic.
+
+#### #26 Klopfgeist default filter
+
+Hide Logic's metronome AU from active-plugin lists by default; expose `--include-metronome` flag for users who want it. CLAUDE.md flags this; mockup also shows it as a phantom by convention.
+
+#### #27 Detect summing/folder tracks (track groups)
+
+Logic's Track Stacks (summing stacks, folder stacks) group child tracks under a parent. Extract the parent→child relationships and surface them in the tracks output (indent or grouped row). Format reverse-engineering needed.
+
+### Reverse-engineering follow-ups (deferred — need new evidence)
+
+#### #28 Strict region→strip bridge `[deferred]`
+
+The exact field linking `gRuA` region records to `OCuA` channel strips is still unidentified. Cluster-based track list shipping as a useful approximation. CLAUDE.md "Region records and user-renamed track names" lists the dead ends. Reopen if a new approach surfaces (e.g. parsing `ivnE` "Environment" records, or a bplist field referencing a region's UUID).
+
+#### #31 Find hidden-track flag `[deferred]`
+
+Ground-truth confirmed: control bytes in track-registry preamble are a track index, not visibility. `Strings` appears both visible AND hidden with identical `22 12 | 80 43`. Hidden flag must live in a separate track-list table not yet reverse-engineered. Reopen when (a) the canonical track list is found (task #28 territory), or (b) a different anchor surfaces.
+
+#### #34 Find the UI track-order list
+
+Registry records are in some order but it's not Logic's UI arrangement order (first record = `Piano` on row 12, second = `Andy & Red` on row 2). Logic must store a separate ordered array of track refs. Candidates: flat array near the registry block; NSKeyedArchive blob; `ivnE` "Environment" record (103 occurrences). Once found, the track output can match Logic's row numbers exactly.
+
+#### #35 Distinguish Folder Stack / Summing Stack / Aux Stack
+
+Currently collapsed under `folder` kind. Logic distinguishes Folder Stack (visual only), Summing Stack (`Sub N` strip — creates an aux), and Aux-based stacks (Atmosphere shows `Aux 8`). The discriminator is probably the channel-strip name in the OCuA record paired with the registry entry. Wire OCuA strip-name lookup back to track entries to expose `folder-stack` vs `summing-stack` vs `aux-stack`.
+
+---
+
+## Completed
+
+#### #15 CLAUDE.md Out of scope + read-only test ✓
+
+Added explicit Out-of-scope section to CLAUDE.md (no write-back, no GUI, no AX automation, no cross-DAW, no VST, no SaaS upload, no smart-guessing). Added a hard test (`tests/test_readonly_invariant.py`) asserting `parse_project` leaves bundle bytes/mtime unchanged.
+
+#### #16 Find region→strip bridge field `[Bet 1]` ✓
+
+Closed via cluster-based approximation. Each registry record maps to one Logic track (verified empirically). The strict bridge field remains unidentified — moved to #28 as deferred.
+
+#### #29 Quick win: extract track-header records (70 03 01 00) ✓
+
+Added `find_track_header_records()` to pick up MIDI/instrument track names that gRuA misses. Filtered Logic-internal noise (`*Automation`, `RBA Sequence`, `Untitled`, `Track Alternatives`, `MIDI Region`, `TRASH`).
+
+#### #30 Track registry extractor (signature whitelist) ✓
+
+`find_track_registry_records()` uses generalised 16-byte preamble pattern with signature whitelist. Six MIDI/instrument signatures, six sub/folder signatures, four bus signatures filtered out. Lifted coverage from 26 → 66 unique track names.
+
+#### #32 Track type column in TRACK LIST output ✓
+
+`TrackEvidence` NamedTuple propagates `kind` (audio/midi/folder/unknown) from each extractor through `RegionCluster`. Conflict resolution: prefer concrete audio/midi over generic folder.
+
+#### #33 Stop deduping by name — use registry records as authoritative track count ✓
+
+`tracks_from_evidence()` replaces name-collapsing `tracks_from_regions()` in the main pipeline. One entry per registry record; gRuA region counts attach to the first matching name. Output now matches Logic's actual track count exactly (69 in busy-living test project).
+
+---
+
+## How to use this file
+
+- **Session start**: read this file, mirror pending tasks into the harness's tracker via `TaskCreate` if the session needs that level of structure.
+- **Status changes**: when a task lands a commit, move it from Pending to Completed with a one-line summary of the outcome.
+- **New tasks**: append under Pending with a short description.
+- **Don't duplicate work**: if a task is in progress in the harness tracker, it's also tracked here — keep them in sync.
+
+The numeric IDs (#15, #16, …) come from the harness's tracker and may not be sequential after pruning. Treat them as stable references.
