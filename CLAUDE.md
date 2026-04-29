@@ -68,7 +68,9 @@ Beyond `gRuA` (audio regions), the binary section of `ProjectData` carries a *tr
 
 Bus signatures (`24 12`, `30 11`, `38 11`, `f5 11`) share the outer structure but are filtered out — buses live on the channel-strip side, not the track side.
 
-The 2 *control bytes* (offset −6/−5 from name) appear to encode track properties, but their meaning isn't fully reverse-engineered. Limited evidence suggests the second byte may differ between visible (`48`, `31`, `35`, …) and hidden (`13`) tracks under signature `23 12`, but the sample is too small to call. **Don't rely on these control bytes for visibility detection without ground-truth from a project where hidden tracks are known.**
+The 2 *control bytes* (offset −6/−5 from name) encode a track index/ID-like value, **not** visibility. Verified against ground truth from a project with 18 hidden tracks named: same name appearing as both visible and hidden ("Strings") shares identical control bytes `22 12 | 80 43`. The `0x80 0x13` value initially looked promising for "hidden" but only because `Ld GTR Low`/`Ld GTR Harm` happened to share an index range with other hidden tracks — not a flag, just an index.
+
+**The hidden flag is somewhere else.** Hypothesis: a separate track-list table (still un-found) carries it. Search for ~69-occurrence record markers came up empty — closest were `Comp` (94) and `Unti` (70, false hit on 'Untitled' string ending). Tracks may need a different anchor. Open until ground-truth-driven analysis identifies the right field.
 
 ## Things that look like bugs but aren't
 
