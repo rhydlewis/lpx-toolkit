@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from lpx_inspect import (
+    TrackEvidence,
     cluster_regions,
     find_region_names,
     find_track_header_records,
@@ -316,7 +317,7 @@ def _track_header(name: bytes, idx_byte: bytes = b"\x25") -> bytes:
 def test_find_track_header_records_extracts_minimal_record():
     raw = b"\x00" * 16 + _track_header(b"Lead Strings")
     records = find_track_header_records(raw)
-    assert [name for _, name in records] == ["Lead Strings"]
+    assert [ev.name for ev in records] == ["Lead Strings"]
 
 
 def test_find_track_header_records_skips_logic_internal_noise():
@@ -333,7 +334,7 @@ def test_find_track_header_records_skips_logic_internal_noise():
         + _track_header(b"MIDI Region")
     )
     records = find_track_header_records(raw)
-    assert [name for _, name in records] == ["Pad", "Bells"]
+    assert [ev.name for ev in records] == ["Pad", "Bells"]
 
 
 def test_find_track_header_records_returns_offsets_in_file_order():
@@ -369,7 +370,7 @@ def test_find_track_registry_records_extracts_with_track_signature():
     """Signature 22 12 marks MIDI/instrument tracks (Pad, Piano, Bells...)."""
     raw = b"\x00" * 16 + _registry_entry(b"Lead Strings", sig=b"\x22\x12")
     records = find_track_registry_records(raw)
-    assert [n for _, n in records] == ["Lead Strings"]
+    assert [ev.name for ev in records] == ["Lead Strings"]
 
 
 def test_find_track_registry_records_skips_bus_signatures():
@@ -380,7 +381,7 @@ def test_find_track_registry_records_skips_bus_signatures():
         + _registry_entry(b"Vocal Verb",   sig=b"\x24\x12")
         + _registry_entry(b"Bass",         sig=b"\x22\x12")
     )
-    names = [n for _, n in find_track_registry_records(raw)]
+    names = [ev.name for ev in find_track_registry_records(raw)]
     assert names == ["Lead Strings", "Bass"]
 
 
@@ -392,7 +393,7 @@ def test_find_track_registry_records_filters_at_context_name_placeholder():
         + _registry_entry(b"@ (=Context Name)")
         + _registry_entry(b"Bells")
     )
-    names = [n for _, n in find_track_registry_records(raw)]
+    names = [ev.name for ev in find_track_registry_records(raw)]
     assert names == ["Pad", "Bells"]
 
 
@@ -406,10 +407,90 @@ def test_find_track_registry_records_recognises_sub_track_signatures():
         + _registry_entry(b"Percussion",        sig=b"\x74\x10")
         + _registry_entry(b"Strings & Pads",    sig=b"\xeb\x11")
     )
-    names = [n for _, n in find_track_registry_records(raw)]
+    names = [ev.name for ev in find_track_registry_records(raw)]
     assert set(names) == {
         "Dialogue", "Keys", "Bells & Synth Keys", "Percussion", "Strings & Pads",
     }
+
+
+# --- TrackEvidence + kind propagation --------------------------------------
+
+
+def test_find_track_registry_records_returns_midi_kind_for_22_12_signature():
+    raw = b"\x00" * 16 + _registry_entry(b"Pad", sig=b"\x22\x12")
+    [evidence] = find_track_registry_records(raw)
+    assert evidence.kind == "midi"
+
+
+def test_find_track_registry_records_returns_audio_kind_for_df_11_signature():
+    raw = b"\x00" * 16 + _registry_entry(b"Slide GTR", sig=b"\xdf\x11")
+    [evidence] = find_track_registry_records(raw)
+    assert evidence.kind == "audio"
+
+
+def test_find_track_registry_records_returns_folder_kind_for_sub_signatures():
+    raw = b"\x00" * 16 + _registry_entry(b"Keys", sig=b"\xe3\x11")
+    [evidence] = find_track_registry_records(raw)
+    assert evidence.kind == "folder"
+
+
+def test_find_track_header_records_tags_kind_as_midi():
+    """Track-header records (\\x70\\x03\\x01\\x00 signature) come from MIDI/
+    instrument tracks in the project registry."""
+    raw = b"\x00" * 16 + _track_header(b"Lead Strings")
+    [evidence] = find_track_header_records(raw)
+    assert evidence.kind == "midi"
+    assert evidence.name == "Lead Strings"
+
+
+def test_evidence_is_unpackable_as_offset_name_kind_triple():
+    """TrackEvidence keeps tuple semantics so callers can unpack it."""
+    raw = b"\x00" * 16 + _registry_entry(b"Pad", sig=b"\x22\x12")
+    evidence = find_track_registry_records(raw)[0]
+    offset, name, kind = evidence
+    assert (name, kind) == ("Pad", "midi")
+    assert isinstance(offset, int)
+
+
+def test_tracks_from_regions_propagates_kind_into_cluster():
+    """When evidence carries a kind, the resulting RegionCluster reflects it."""
+    records = [
+        TrackEvidence(100, "Lead Strings", "midi"),
+        TrackEvidence(200, "Lead Strings", "midi"),
+        TrackEvidence(300, "Slide GTR", "audio"),
+    ]
+    tracks = tracks_from_regions(records)
+    by_name = {t.base_name: t for t in tracks}
+    assert by_name["Lead Strings"].kind == "midi"
+    assert by_name["Slide GTR"].kind == "audio"
+
+
+def test_tracks_from_regions_accepts_legacy_tuple_records():
+    """Legacy 2-tuple records still work — kind defaults to 'unknown' so
+    older callers don't break."""
+    records = [(100, "Acoustic GTR"), (200, "Acoustic GTR")]
+    tracks = tracks_from_regions(records)
+    assert tracks[0].kind == "unknown"
+
+
+def test_tracks_from_regions_promotes_audio_or_midi_over_folder():
+    """When the same name shows up under both a folder signature (e.g.
+    Timpani inherits 0x74 0x10 because it lives in the Percussion sub)
+    AND a midi-inferring source (track-header record), the region/header
+    evidence wins — Timpani is a midi track, not a folder."""
+    records = [
+        TrackEvidence(100, "Timpani", "folder"),
+        TrackEvidence(200, "Timpani", "midi"),
+    ]
+    [track] = tracks_from_regions(records)
+    assert track.kind == "midi"
+
+
+def test_tracks_from_regions_keeps_folder_when_no_other_evidence():
+    """A registry-only track with a folder signature stays a folder."""
+    records = [TrackEvidence(100, "Percussion", "folder")]
+    [track] = tracks_from_regions(records)
+    assert track.kind == "folder"
 
 
 @pytest.mark.skipif(not _REAL_PROJECT_AVAILABLE, reason="LPX_TEST_PROJECT not set or missing")

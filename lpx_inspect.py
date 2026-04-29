@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 # 4CC types stored little-endian in ProjectData.
 AU_TYPES = {
@@ -182,16 +183,44 @@ _AUTO_TRACK_NAME_RE = re.compile(
 
 @dataclass
 class RegionCluster:
-    """A run of consecutive region records sharing one base name — i.e. one
-    user-perceived track. base_name is the cleaned form; count is how many
-    records contributed; first/last_offset bracket the byte range."""
+    """A run of consecutive records sharing one base name — i.e. one
+    user-perceived track. `base_name` is the cleaned form; `count` is how
+    many records contributed; `first/last_offset` bracket the byte range;
+    `kind` is the inferred track type ('audio'/'midi'/'folder'/'unknown')
+    derived from the strongest evidence available."""
     base_name: str
     count: int
     first_offset: int
     last_offset: int
+    kind: str = "unknown"
 
 
-def tracks_from_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
+def _unpack_record(record) -> tuple[int, str, str]:
+    """Accept TrackEvidence, (offset, name, kind), or legacy (offset, name)."""
+    if len(record) >= 3:
+        return record[0], record[1], record[2]
+    return record[0], record[1], "unknown"
+
+
+def _stronger_kind(existing: str, candidate: str) -> str:
+    """Pick the more authoritative kind from two evidence records.
+
+    Some signatures are shared between sub/folder tracks and the MIDI
+    instrument tracks inside them (e.g. the 0x74 0x10 signature carries
+    both `Percussion` and the `Timpani` track underneath it). When both
+    'folder' and 'audio'/'midi' evidence is present for one name, the
+    region/header source is more specific — prefer it over 'folder'.
+    """
+    if candidate == "unknown":
+        return existing
+    if existing == "unknown":
+        return candidate
+    if existing == "folder" and candidate in ("audio", "midi"):
+        return candidate
+    return existing
+
+
+def tracks_from_regions(records) -> list[RegionCluster]:
     """Collapse region records into unique tracks, in first-appearance order.
 
     Tracks' regions interleave in `ProjectData` once a project gets
@@ -200,7 +229,8 @@ def tracks_from_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
     order without parsing the (still-unidentified) track-list metadata.
     """
     by_name: dict[str, RegionCluster] = {}
-    for offset, raw_name in records:
+    for record in records:
+        offset, raw_name, kind = _unpack_record(record)
         cleaned = _strip_region_suffixes(raw_name)
         if not _is_user_track_name(cleaned):
             continue
@@ -211,14 +241,16 @@ def tracks_from_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
                 count=1,
                 first_offset=offset,
                 last_offset=offset,
+                kind=kind,
             )
         else:
             existing.count += 1
             existing.last_offset = offset
+            existing.kind = _stronger_kind(existing.kind, kind)
     return list(by_name.values())
 
 
-def cluster_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
+def cluster_regions(records) -> list[RegionCluster]:
     """Group consecutive records (in offset order) by their base name.
 
     Each track's regions are stored contiguously in ProjectData, so a run of
@@ -229,19 +261,22 @@ def cluster_regions(records: list[tuple[int, str]]) -> list[RegionCluster]:
     """
     clusters: list[RegionCluster] = []
     current: RegionCluster | None = None
-    for offset, raw_name in records:
+    for record in records:
+        offset, raw_name, kind = _unpack_record(record)
         cleaned = _strip_region_suffixes(raw_name)
         if not _is_user_track_name(cleaned):
             continue
         if current is not None and current.base_name == cleaned:
             current.count += 1
             current.last_offset = offset
+            current.kind = _stronger_kind(current.kind, kind)
         else:
             current = RegionCluster(
                 base_name=cleaned,
                 count=1,
                 first_offset=offset,
                 last_offset=offset,
+                kind=kind,
             )
             clusters.append(current)
     return clusters
@@ -302,24 +337,34 @@ TRACK_HEADER_NOISE = frozenset({
 })
 
 
+class TrackEvidence(NamedTuple):
+    """Single evidence record for a track: where in the file we saw it,
+    what name it carried, and which extractor (with what kind hint) found
+    it. Kind is one of 'audio', 'midi', 'folder', 'unknown'."""
+    offset: int
+    name: str
+    kind: str
+
+
 # Track-registry signatures observed empirically. Each Logic track entry has
 # a 16-byte preamble: 4 zeros + 2-byte signature + 4 zeros + 2 bytes + 2 zeros
 # + 2-byte LE length + ASCII name. Different track *kinds* use different
 # signatures; buses and presets share the same outer structure but with
 # different signatures, so we whitelist only the track ones.
-TRACK_SIGNATURES = frozenset({
-    b"\x22\x12",  # MIDI / instrument tracks
-    b"\x23\x12",  # audio tracks (some)
-    b"\xdc\x11",  # audio tracks (some)
-    b"\xdf\x11",  # audio tracks (Slide GTR / Intro Lead GTR family)
-    b"\xa8\x11",  # single-instrument tracks (Dome Kick)
-    b"\x74\x10",  # sub / percussion folder
-    b"\xcb\x10",  # sub / dialogue folder
-    b"\xe3\x11",  # sub / keys folder
-    b"\xe4\x10",  # sub / bells & synth keys folder
-    b"\xeb\x11",  # sub / strings & pads folder
-    b"\xe7\x11",  # atmosphere / pad-cluster folder
-})
+TRACK_SIGNATURE_KIND: dict[bytes, str] = {
+    b"\x22\x12": "midi",     # MIDI / instrument tracks
+    b"\xa8\x11": "midi",     # single-instrument tracks (Dome Kick)
+    b"\x23\x12": "audio",    # audio tracks (some)
+    b"\xdc\x11": "audio",    # audio tracks (some)
+    b"\xdf\x11": "audio",    # audio tracks (Slide GTR / Intro Lead GTR)
+    b"\x74\x10": "folder",   # sub / percussion
+    b"\xcb\x10": "folder",   # sub / dialogue
+    b"\xe3\x11": "folder",   # sub / keys
+    b"\xe4\x10": "folder",   # sub / bells & synth keys
+    b"\xeb\x11": "folder",   # sub / strings & pads
+    b"\xe7\x11": "folder",   # atmosphere / pad-cluster
+}
+TRACK_SIGNATURES = frozenset(TRACK_SIGNATURE_KIND.keys())
 
 TRACK_REGISTRY_RE = re.compile(
     rb"\x00\x00\x00\x00([\s\S]{2})\x00\x00\x00\x00[\s\S]{2}\x00\x00([\s\S]\x00)"
@@ -342,18 +387,19 @@ TRACK_REGISTRY_NOISE = frozenset({
 })
 
 
-def find_track_registry_records(raw: bytes) -> list[tuple[int, str]]:
-    """Extract (offset, name) pairs from track-registry entries.
+def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
+    """Extract TrackEvidence records from track-registry entries.
 
     Each Logic track has a registry entry with a 16-byte preamble whose 2-byte
     signature identifies the track kind. We whitelist signatures that
     correspond to real user tracks (audio / instrument / sub headers), which
     excludes buses and preset entries that share the outer structure.
     """
-    out: list[tuple[int, str]] = []
+    out: list[TrackEvidence] = []
     for m in TRACK_REGISTRY_RE.finditer(raw):
-        sig = m.group(1)
-        if sig not in TRACK_SIGNATURES:
+        sig = bytes(m.group(1))
+        kind = TRACK_SIGNATURE_KIND.get(sig)
+        if kind is None:
             continue
         length_lo, length_hi = m.group(2)[0], m.group(2)[1]
         if length_hi != 0:
@@ -367,12 +413,12 @@ def find_track_registry_records(raw: bytes) -> list[tuple[int, str]]:
         name = nb.decode("ascii")
         if name in TRACK_REGISTRY_NOISE:
             continue
-        out.append((m.start(), name))
+        out.append(TrackEvidence(offset=m.start(), name=name, kind=kind))
     return out
 
 
-def find_track_header_records(raw: bytes) -> list[tuple[int, str]]:
-    """Extract (offset, name) pairs from track-header records.
+def find_track_header_records(raw: bytes) -> list[TrackEvidence]:
+    """Extract TrackEvidence records from track-header entries.
 
     These are emitted once per Logic track and include MIDI/instrument
     tracks that the audio-region (`gRuA`) parser misses entirely. System
@@ -380,7 +426,7 @@ def find_track_header_records(raw: bytes) -> list[tuple[int, str]]:
     `RBA Sequence`, `Untitled` placeholders) are filtered out — they're
     Logic-internal scaffolding, not user tracks.
     """
-    out: list[tuple[int, str]] = []
+    out: list[TrackEvidence] = []
     for m in TRACK_HEADER_RE.finditer(raw):
         length_lo, length_hi = m.group(1)[0], m.group(1)[1]
         if length_hi != 0:
@@ -396,13 +442,13 @@ def find_track_header_records(raw: bytes) -> list[tuple[int, str]]:
         name = nb.decode("ascii")
         if name in TRACK_HEADER_NOISE:
             continue
-        out.append((m.start(), name))
+        out.append(TrackEvidence(offset=m.start(), name=name, kind="midi"))
     return out
 
 
-def find_region_records(raw: bytes) -> list[tuple[int, str]]:
-    """Extract (offset, name) pairs for every valid region record."""
-    out: list[tuple[int, str]] = []
+def find_region_records(raw: bytes) -> list[TrackEvidence]:
+    """Extract TrackEvidence records for every valid audio region."""
+    out: list[TrackEvidence] = []
     for m in REGION_MARKER_RE.finditer(raw):
         len_off = m.end()
         length = struct.unpack("<H", raw[len_off:len_off + 2])[0]
@@ -411,7 +457,11 @@ def find_region_records(raw: bytes) -> list[tuple[int, str]]:
         name_bytes = raw[len_off + 2:len_off + 2 + length]
         if not all(0x20 <= b < 0x7f for b in name_bytes):
             continue
-        out.append((m.start(), name_bytes.decode("ascii")))
+        out.append(TrackEvidence(
+            offset=m.start(),
+            name=name_bytes.decode("ascii"),
+            kind="audio",
+        ))
     return out
 
 
@@ -422,7 +472,7 @@ def find_region_names(raw: bytes) -> list[str]:
     length> <ascii name>. The name is the same string Logic shows in the
     track header (regions inherit it from their parent track by default).
     """
-    return [name for _, name in find_region_records(raw)]
+    return [ev.name for ev in find_region_records(raw)]
 
 
 def find_aus(raw: bytes) -> list[AURef]:
@@ -806,13 +856,16 @@ def main(path: str, dump_bplists: bool = False) -> None:
     header_records = find_track_header_records(raw)
     registry_records = find_track_registry_records(raw)
     # Project name leaks into the various registries — filter at output time.
+    # Registry records carry the most reliable kind (signature-derived) so put
+    # them first; tracks_from_regions takes the first concrete kind it sees.
     all_records = [
-        r for r in region_records + header_records + registry_records
-        if r[1] != info.name
+        r for r in registry_records + header_records + region_records
+        if r.name != info.name
     ]
-    combined = sorted(all_records, key=lambda r: r[0])
-    tracks = tracks_from_regions(combined)
+    tracks = tracks_from_regions(all_records)
     if tracks:
+        # Sort by file-order first appearance for arrangement-order display
+        tracks.sort(key=lambda t: t.first_offset)
         print(
             f"\n=== TRACK LIST ({len(tracks)} from region + header + registry records) ==="
             "\n(first-appearance order; strip shown when the region name"
@@ -821,7 +874,10 @@ def main(path: str, dump_bplists: bool = False) -> None:
         for i, t in enumerate(tracks, 1):
             auto = bool(_AUTO_TRACK_NAME_RE.match(t.base_name))
             strip = t.base_name if auto else "—"
-            print(f"  {i:>2}. {t.base_name:30s}  strip: {strip:10s}  ({t.count} regions)")
+            print(
+                f"  {i:>2}. {t.base_name:30s}  type: {t.kind:7s}  "
+                f"strip: {strip:10s}  ({t.count} regions)"
+            )
 
     if dump_bplists:
         summarise_bplists(extract_bplists(raw))
