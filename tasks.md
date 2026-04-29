@@ -72,11 +72,18 @@ Ground-truth confirmed: control bytes in track-registry preamble are a track ind
 
 #### #34 Find the UI track-order list
 
-Registry records are in some order but it's not Logic's UI arrangement order (first record = `Piano` on row 12, second = `Andy & Red` on row 2). Logic must store a separate ordered array of track refs. Candidates: flat array near the registry block; NSKeyedArchive blob; `ivnE` "Environment" record (103 occurrences). Once found, the track output can match Logic's row numbers exactly.
+UI track-order list **NOT YET FOUND**. Investigation conducted:
 
-#### #35 Distinguish Folder Stack / Summing Stack / Aux Stack
+- No 4-byte or 8-byte LE arrays of offsets pointing into the registry block (`6111929`–`6186949` in busy-living)
+- The 24 bplists clustered near the registry block are Smart Controls layouts (`MAPlugInParameterMapping` objects), not track-list ordering
+- Largest bplists overall are all parameter-mapping records, not track lists
 
-Currently collapsed under `folder` kind. Logic distinguishes Folder Stack (visual only), Summing Stack (`Sub N` strip — creates an aux), and Aux-based stacks (Atmosphere shows `Aux 8`). The discriminator is probably the channel-strip name in the OCuA record paired with the registry entry. Wire OCuA strip-name lookup back to track entries to expose `folder-stack` vs `summing-stack` vs `aux-stack`.
+Next angles to try:
+- Parse NSKeyedArchive blobs looking for a `TracksAreaTrackList` or similar named object
+- Look for arrays of channel UUIDs (18 `_WsChannelUUID` already extracted)
+- Inspect `ivnE` Environment record (103 occurrences in the file)
+
+Once found, the track output can match Logic's row numbers exactly.
 
 ---
 
@@ -105,6 +112,10 @@ Added `find_track_header_records()` to pick up MIDI/instrument track names that 
 #### #33 Stop deduping by name — use registry records as authoritative track count ✓
 
 `tracks_from_evidence()` replaces name-collapsing `tracks_from_regions()` in the main pipeline. One entry per registry record; gRuA region counts attach to the first matching name. Output now matches Logic's actual track count exactly (69 in busy-living test project).
+
+#### #35 Distinguish Folder Stack / Summing Stack / Aux Stack ✓
+
+Trailer-pattern discriminator: a Summing Stack carries `XX 01 00 NN 00 01` immediately after its name (where `XX` ≈ `0x54 + sub_number`, `NN` is the Sub number). When this matches, kind is upgraded to `summing-stack` regardless of signature — so `Backline` and `Guitars` (which use signature `23 12` shared with regular audio tracks) are now correctly classified. `_is_summing_stack_trailer()` accepts a leading null between name and trailer for records that emit one (e.g. Guitars). Aux-based Track Stacks (`Atmosphere (Millenniums)`) and their children stay as the generic `folder` — distinguishing them further is left as a follow-up. CLAUDE.md "Summing Stack detection" section documents the format.
 
 ---
 

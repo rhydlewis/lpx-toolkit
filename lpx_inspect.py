@@ -233,11 +233,22 @@ def tracks_from_evidence(
     attach to matching registry entries by name. Tracks visible only via
     region evidence (no registry entry) are appended as audio extras.
 
-    Header records (the `\\x70\\x03\\x01\\x00` source) are accepted but
-    not used for counting — they have an N:1 ratio per track and aren't a
-    reliable count signal. They contribute no entries beyond what
-    registry already produces.
+    Header records (the `\\x70\\x03\\x01\\x00` source) refine the kind
+    when registry signature is ambiguous — e.g. Timpani's registry
+    signature 0x74 0x10 is the Percussion folder colour group, but the
+    track-header records correctly identify it as MIDI.
     """
+    # Aggregate kind hints from headers and regions (by name)
+    name_kind_hints: dict[str, str] = {}
+    for record in list(header_records) + list(region_records):
+        _, raw_name, kind = _unpack_record(record)
+        cleaned = _strip_region_suffixes(raw_name)
+        if not _is_user_track_name(cleaned):
+            continue
+        name_kind_hints[cleaned] = _stronger_kind(
+            name_kind_hints.get(cleaned, "unknown"), kind
+        )
+
     # Per-name region counts and first-appearance offsets
     region_counts: Counter = Counter()
     region_first_offset: dict[str, int] = {}
@@ -258,6 +269,9 @@ def tracks_from_evidence(
         cleaned = _strip_region_suffixes(raw_name)
         if not _is_user_track_name(cleaned):
             continue
+        # Refine kind with header/region evidence (folder→midi/audio when
+        # header or region source disagrees with the registry signature)
+        kind = _stronger_kind(kind, name_kind_hints.get(cleaned, "unknown"))
         # Region count attributed to the FIRST registry entry for this name;
         # later entries with the same name get 0 (we can't split regions
         # without a track-ID — best-effort, biases to first).
@@ -457,6 +471,28 @@ TRACK_REGISTRY_NOISE = frozenset({
 })
 
 
+def _is_summing_stack_trailer(trailer: bytes) -> bool:
+    """Summing Stacks (Sub N folders) carry the trailer pattern
+    `XX 01 00 NN 00 01` immediately after the name, where XX varies (looks
+    like 0x54 + sub_number) and NN is the Sub number. Other folder kinds
+    (Aux Stack, child tracks inside an Aux Stack) have `XX 00 00 ff 00 01`
+    or similar — second byte is 0x00 not 0x01.
+
+    Some records (e.g. Guitars) emit a trailing null after the name, so
+    we accept the pattern at offset 0 *or* at offset 1 (skipping one null).
+    """
+    for start in (0, 1):
+        candidate = trailer[start:start + 6]
+        if len(candidate) < 6:
+            continue
+        if (candidate[1] == 0x01
+                and candidate[2] == 0x00
+                and candidate[4] == 0x00
+                and candidate[5] == 0x01):
+            return True
+    return False
+
+
 def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
     """Extract TrackEvidence records from track-registry entries.
 
@@ -464,6 +500,10 @@ def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
     signature identifies the track kind. We whitelist signatures that
     correspond to real user tracks (audio / instrument / sub headers), which
     excludes buses and preset entries that share the outer structure.
+
+    Folder-signature records are further refined: a Summing Stack
+    (`Sub N` strip) shows a distinct trailer pattern after the name, so we
+    upgrade kind from generic `folder` to `summing-stack` when matched.
     """
     out: list[TrackEvidence] = []
     for m in TRACK_REGISTRY_RE.finditer(raw):
@@ -483,6 +523,12 @@ def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
         name = nb.decode("ascii")
         if name in TRACK_REGISTRY_NOISE:
             continue
+        # Some signatures (23 12, dc 11) are shared between regular audio
+        # tracks AND audio Summing Stacks (Backline, Guitars). Check the
+        # trailer pattern regardless of the signature-derived kind.
+        trailer = raw[name_off + length_lo:name_off + length_lo + 8]
+        if _is_summing_stack_trailer(trailer):
+            kind = "summing-stack"
         out.append(TrackEvidence(offset=m.start(), name=name, kind=kind))
     return out
 

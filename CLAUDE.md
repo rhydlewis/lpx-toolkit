@@ -68,6 +68,14 @@ Beyond `gRuA` (audio regions), the binary section of `ProjectData` carries a *tr
 
 Bus signatures (`24 12`, `30 11`, `38 11`, `f5 11`) share the outer structure but are filtered out — buses live on the channel-strip side, not the track side.
 
+### Summing Stack detection
+
+Logic distinguishes Folder Stacks (visual only), Summing Stacks (`Sub N` strip — children sum to an aux), and Aux-based Track Stacks (`Atmosphere (Millenniums)` shows `Aux 8`). Summing Stacks share the registry signature with regular audio tracks (`23 12`, `dc 11`) so the signature alone isn't enough.
+
+The discriminator is a trailer pattern after the name: `XX 01 00 NN 00 01` where `XX` ≈ `0x54 + sub_number` and `NN` is the Sub number. When this matches, kind is upgraded to `summing-stack` regardless of signature. Some records (e.g. Guitars) emit a trailing null between the name and the trailer, so `_is_summing_stack_trailer()` checks both offset-0 and offset-1 starts.
+
+Aux-based Track Stacks and the children inside them (Atmosphere, Pad 1, Pad 2 in busy-living) currently report as the generic `folder` — distinguishing them from Summing Stacks works, but the *kind* of each non-Summing folder is left as a follow-up.
+
 The 2 *control bytes* (offset −6/−5 from name) encode a track index/ID-like value, **not** visibility. Verified against ground truth from a project with 18 hidden tracks named: same name appearing as both visible and hidden ("Strings") shares identical control bytes `22 12 | 80 43`. The `0x80 0x13` value initially looked promising for "hidden" but only because `Ld GTR Low`/`Ld GTR Harm` happened to share an index range with other hidden tracks — not a flag, just an index.
 
 **The hidden flag is somewhere else.** Hypothesis: a separate track-list table (still un-found) carries it. Search for ~69-occurrence record markers came up empty — closest were `Comp` (94) and `Unti` (70, false hit on 'Untitled' string ending). Tracks may need a different anchor. Open until ground-truth-driven analysis identifies the right field.

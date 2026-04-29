@@ -414,6 +414,75 @@ def test_find_track_registry_records_recognises_sub_track_signatures():
     }
 
 
+# --- Summing Stack detection ---------------------------------------------
+
+
+def _registry_entry_with_trailer(
+    name: bytes, sig: bytes = b"\xcb\x10", trailer: bytes = b""
+) -> bytes:
+    """Synthesise a registry record with a specific trailer after the name.
+    Used to distinguish Summing Stacks (trailer: XX 01 00 NN 00 01) from
+    other folder kinds (Aux Stack, generic folder, etc.)."""
+    return (
+        b"\x00" * 4
+        + sig
+        + b"\x00" * 4
+        + b"\x80\x00"
+        + b"\x00" * 2
+        + len(name).to_bytes(2, "little")
+        + name
+        + trailer
+    )
+
+
+def test_find_track_registry_records_classifies_summing_stack_as_distinct_kind():
+    """Sub tracks (Summing Stacks) carry the trailer pattern XX 01 00 NN 00 01
+    immediately after the name. Detect this and emit kind='summing-stack'
+    rather than the generic 'folder'."""
+    # Trailer for Sub 2: XX=any, 01, 00, sub_num=2, 00, 01
+    summing_trailer = b"\x56\x01\x00\x02\x00\x01"
+    raw = b"\x00" * 16 + _registry_entry_with_trailer(
+        b"Dialogue", sig=b"\xcb\x10", trailer=summing_trailer
+    )
+    [ev] = find_track_registry_records(raw)
+    assert ev.kind == "summing-stack"
+
+
+def test_find_track_registry_records_keeps_folder_kind_when_trailer_is_aux_pattern():
+    """Aux-based Track Stacks have trailer XX 00 00 ff 00 01 — the second
+    byte is 0x00 not 0x01. They stay as 'folder' (or could be refined to
+    'aux-stack' later)."""
+    aux_trailer = b"\x2c\x00\x00\xff\x00\x01"
+    raw = b"\x00" * 16 + _registry_entry_with_trailer(
+        b"Atmosphere", sig=b"\xe7\x11", trailer=aux_trailer
+    )
+    [ev] = find_track_registry_records(raw)
+    assert ev.kind == "folder"
+
+
+def test_find_track_registry_records_upgrades_audio_signature_with_summing_trailer():
+    """Some Summing Stacks share signatures with regular audio tracks
+    (Backline / Guitars use 0x23 0x12, also used by Andy & Red). The trailer
+    pattern is the authoritative discriminator: when present, classify as
+    summing-stack regardless of signature."""
+    summing_trailer = b"\x5a\x01\x00\x06\x00\x01"  # Sub 6 (Backline)
+    raw = b"\x00" * 16 + _registry_entry_with_trailer(
+        b"Backline", sig=b"\x23\x12", trailer=summing_trailer
+    )
+    [ev] = find_track_registry_records(raw)
+    assert ev.kind == "summing-stack"
+
+
+def test_find_track_registry_records_keeps_audio_for_records_without_summing_trailer():
+    """Audio tracks that aren't Summing Stacks keep kind='audio'."""
+    plain_trailer = b"\x01\x00\x00\x00\x00\x01"  # not a summing-stack pattern
+    raw = b"\x00" * 16 + _registry_entry_with_trailer(
+        b"Andy & Red", sig=b"\x23\x12", trailer=plain_trailer
+    )
+    [ev] = find_track_registry_records(raw)
+    assert ev.kind == "audio"
+
+
 # --- TrackEvidence + kind propagation --------------------------------------
 
 
