@@ -220,6 +220,76 @@ def _stronger_kind(existing: str, candidate: str) -> str:
     return existing
 
 
+def tracks_from_evidence(
+    registry_records: list,
+    header_records: list,
+    region_records: list,
+) -> list[RegionCluster]:
+    """Build the canonical track list from multi-source evidence.
+
+    Each whitelisted *registry* record is exactly one Logic track —
+    verified empirically (Andy & Red ×2, Reversed Intro GTR ×2,
+    Synth Lead ×2 all show 2 registry records). Region (gRuA) counts
+    attach to matching registry entries by name. Tracks visible only via
+    region evidence (no registry entry) are appended as audio extras.
+
+    Header records (the `\\x70\\x03\\x01\\x00` source) are accepted but
+    not used for counting — they have an N:1 ratio per track and aren't a
+    reliable count signal. They contribute no entries beyond what
+    registry already produces.
+    """
+    # Per-name region counts and first-appearance offsets
+    region_counts: Counter = Counter()
+    region_first_offset: dict[str, int] = {}
+    for record in region_records:
+        offset, raw_name, _ = _unpack_record(record)
+        cleaned = _strip_region_suffixes(raw_name)
+        if not _is_user_track_name(cleaned):
+            continue
+        region_counts[cleaned] += 1
+        region_first_offset.setdefault(cleaned, offset)
+
+    out: list[RegionCluster] = []
+    used_names: set[str] = set()
+
+    # One entry per registry record — preserves duplicate names (= different tracks).
+    for record in registry_records:
+        offset, raw_name, kind = _unpack_record(record)
+        cleaned = _strip_region_suffixes(raw_name)
+        if not _is_user_track_name(cleaned):
+            continue
+        # Region count attributed to the FIRST registry entry for this name;
+        # later entries with the same name get 0 (we can't split regions
+        # without a track-ID — best-effort, biases to first).
+        regions_attributed = (
+            region_counts.get(cleaned, 0) if cleaned not in used_names else 0
+        )
+        used_names.add(cleaned)
+        first_off = region_first_offset.get(cleaned, offset)
+        out.append(RegionCluster(
+            base_name=cleaned,
+            count=regions_attributed,
+            first_offset=first_off,
+            last_offset=offset,
+            kind=kind,
+        ))
+
+    # Region-only entries — names with gRuA evidence but no registry record
+    for name, count in region_counts.items():
+        if name in used_names:
+            continue
+        offset = region_first_offset[name]
+        out.append(RegionCluster(
+            base_name=name,
+            count=count,
+            first_offset=offset,
+            last_offset=offset,
+            kind="audio",
+        ))
+
+    return out
+
+
 def tracks_from_regions(records) -> list[RegionCluster]:
     """Collapse region records into unique tracks, in first-appearance order.
 
@@ -856,20 +926,17 @@ def main(path: str, dump_bplists: bool = False) -> None:
     header_records = find_track_header_records(raw)
     registry_records = find_track_registry_records(raw)
     # Project name leaks into the various registries — filter at output time.
-    # Registry records carry the most reliable kind (signature-derived) so put
-    # them first; tracks_from_regions takes the first concrete kind it sees.
-    all_records = [
-        r for r in registry_records + header_records + region_records
-        if r.name != info.name
-    ]
-    tracks = tracks_from_regions(all_records)
+    project_name = info.name
+    region_records = [r for r in region_records if r.name != project_name]
+    header_records = [r for r in header_records if r.name != project_name]
+    registry_records = [r for r in registry_records if r.name != project_name]
+
+    tracks = tracks_from_evidence(registry_records, header_records, region_records)
     if tracks:
-        # Sort by file-order first appearance for arrangement-order display
         tracks.sort(key=lambda t: t.first_offset)
         print(
-            f"\n=== TRACK LIST ({len(tracks)} from region + header + registry records) ==="
-            "\n(first-appearance order; strip shown when the region name"
-            "\nmatches a default channel-strip pattern)"
+            f"\n=== TRACK LIST ({len(tracks)} tracks) ==="
+            "\n(one entry per registry record — duplicate names = different tracks)"
         )
         for i, t in enumerate(tracks, 1):
             auto = bool(_AUTO_TRACK_NAME_RE.match(t.base_name))

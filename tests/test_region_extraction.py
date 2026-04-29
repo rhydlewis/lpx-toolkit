@@ -19,6 +19,7 @@ from lpx_inspect import (
     find_track_header_records,
     find_track_registry_records,
     partition_track_names,
+    tracks_from_evidence,
     tracks_from_regions,
     unique_track_names,
 )
@@ -491,6 +492,72 @@ def test_tracks_from_regions_keeps_folder_when_no_other_evidence():
     records = [TrackEvidence(100, "Percussion", "folder")]
     [track] = tracks_from_regions(records)
     assert track.kind == "folder"
+
+
+# --- tracks_from_evidence: registry-record-driven track listing -----------
+
+
+def test_tracks_from_evidence_returns_empty_for_empty_input():
+    assert tracks_from_evidence([], [], []) == []
+
+
+def test_tracks_from_evidence_keeps_each_registry_record_as_one_track():
+    """The same name with two registry records (Andy & Red on Audio 1 +
+    Audio 27 — different Logic tracks, same name) must emit two entries.
+    This is the central fix: registry records are 1:1 with Logic tracks,
+    so don't dedup by name."""
+    registry = [
+        TrackEvidence(100, "Andy & Red", "audio"),
+        TrackEvidence(200, "Andy & Red", "audio"),
+    ]
+    tracks = tracks_from_evidence(registry, [], [])
+    assert [t.base_name for t in tracks] == ["Andy & Red", "Andy & Red"]
+    assert all(t.kind == "audio" for t in tracks)
+
+
+def test_tracks_from_evidence_attaches_region_count_to_named_match():
+    """gRuA region records count toward their matching track entry."""
+    registry = [TrackEvidence(1000, "Acoustic GTR", "audio")]
+    regions = [
+        TrackEvidence(100, "Acoustic GTR", "audio"),
+        TrackEvidence(110, "Acoustic GTR", "audio"),
+        TrackEvidence(120, "Acoustic GTR", "audio"),
+    ]
+    [track] = tracks_from_evidence(registry, [], regions)
+    assert track.base_name == "Acoustic GTR"
+    assert track.count == 3
+
+
+def test_tracks_from_evidence_emits_region_only_tracks_after_registry_ones():
+    """Tracks appearing only in gRuA evidence (no registry entry — could
+    be arrangement markers or tracks with a registry shape we haven't
+    catalogued) still get an entry, marked as audio."""
+    registry = [TrackEvidence(1000, "Acoustic GTR", "audio")]
+    regions = [
+        TrackEvidence(50, "intro", "audio"),
+        TrackEvidence(60, "output", "audio"),
+    ]
+    tracks = tracks_from_evidence(registry, [], regions)
+    names = [t.base_name for t in tracks]
+    assert "Acoustic GTR" in names
+    assert "intro" in names
+    assert "output" in names
+
+
+def test_tracks_from_evidence_attributes_region_count_to_first_registry_entry_only():
+    """When two registry records share a name, region matches go to the
+    first one — the duplicates count themselves only. Without a track-ID
+    we can't split regions between same-named tracks; biasing to the
+    first is a documented best-effort."""
+    registry = [
+        TrackEvidence(1000, "Strings", "midi"),
+        TrackEvidence(1100, "Strings", "midi"),
+    ]
+    regions = [TrackEvidence(50, "Strings", "audio")]
+    tracks = tracks_from_evidence(registry, [], regions)
+    assert len(tracks) == 2
+    assert tracks[0].count == 1
+    assert tracks[1].count == 0
 
 
 @pytest.mark.skipif(not _REAL_PROJECT_AVAILABLE, reason="LPX_TEST_PROJECT not set or missing")
