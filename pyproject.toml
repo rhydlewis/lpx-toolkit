@@ -1,3 +1,36 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lpx-toolkit"
+version = "0.1.0"
+description = "Read-only Logic Pro project inspector — extracts AU plugin manifest, tracks, and metadata from .logicx bundles."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Rhyd Lewis" }]
+keywords = ["logic-pro", "audio-units", "music-production", "macos"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Sound/Audio :: Editors",
+]
+
+[project.scripts]
+lpxtool = "lpx_inspect:cli"
+
+[project.urls]
+Repository = "https://github.com/rhydlewis/lpx-toolkit"
+
+[tool.setuptools]
+py-modules = ["lpx_inspect"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: lpx-toolkit
+Version: 0.1.0
+Summary: Read-only Logic Pro project inspector — extracts AU plugin manifest, tracks, and metadata from .logicx bundles.
+Author: Rhyd Lewis
+License-Expression: MIT
+Project-URL: Repository, https://github.com/rhydlewis/lpx-toolkit
+Keywords: logic-pro,audio-units,music-production,macos
+Classifier: Development Status :: 4 - Beta
+Classifier: Environment :: Console
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: Operating System :: MacOS :: MacOS X
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Topic :: Multimedia :: Sound/Audio
+Classifier: Topic :: Multimedia :: Sound/Audio :: Editors
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Dynamic: license-file
+
 # lpx-toolkit
 
 A Python tool that extracts the plugin manifest, track list, and metadata from a Logic Pro project file (`.logicx`) without opening Logic.
@@ -60,45 +81,18 @@ See `CLAUDE.md` for a detailed walk through the format and the specific quirks t
 - Python 3.10+
 - A Logic Pro project to inspect
 
-## Install
-
-```sh
-# Set up a venv and install editable
-python3 -m venv .venv
-.venv/bin/pip install -e .
-
-# Optional: make the `lpxtool` command available outside the venv
-ln -sf "$(pwd)/.venv/bin/lpxtool" ~/bin/lpxtool   # if ~/bin is on PATH
-# or
-brew install pipx && pipx install -e .            # isolated, system-wide
-```
-
-After install, the `lpxtool` command is available.
-
 ## Usage
 
 ```sh
-lpxtool ~/Music/Logic/SomeProject.logicx
-lpxtool ~/Music/Logic/SomeProject.logicx --bplists
-lpxtool ~/Music/Logic/SomeProject.logicx --json
-lpxtool ~/Music/Logic/SomeProject.logicx --html
-lpxtool --rollup ~/Music/Logic/*.logicx
-```
-
-You can still invoke as a script during development:
-
-```sh
 python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx
+python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --bplists
+python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --json
+python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --html
 ```
 
 The `--json` flag emits a structured payload (project metadata, per-track strip + plugin chain, vendor rollup) for piping into other tools. Schema is versioned via the top-level `schema_version` field (currently `1`).
 
 The `--html` flag generates a self-contained HTML dashboard (project metadata, tracks table, FX chains, vendor rollup, phantom plugins, diagnostics) and opens it in the macOS default browser. Output lands in `$TMPDIR/lpx-toolkit-<slug>.html`.
-
-```sh
-# Just one project — opens the dashboard in your browser
-lpxtool --html ~/Music/Logic/SomeProject.logicx
-```
 
 ### Cross-project rollup
 
