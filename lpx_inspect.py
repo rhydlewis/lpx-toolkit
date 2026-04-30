@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Footer links — used by both the per-project dashboard and the library index.
 _REPO_URL = "https://github.com/rhydlewis/lpx-toolkit"

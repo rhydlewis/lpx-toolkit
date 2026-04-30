@@ -67,6 +67,8 @@ python3 -m venv .venv
 .venv/bin/lpxtool ~/Music/Logic/SomeProject.logicx
 ```
 
+Both `lpx-toolkit` and `lpxtool` invoke the same tool — `lpxtool` is the shorter alias for typing once installed.
+
 ## Usage
 
 ```sh

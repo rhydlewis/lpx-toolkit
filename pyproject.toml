@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lpx-toolkit"
-version = "0.1.0"
+version = "0.1.1"
 description = "Read-only Logic Pro project inspector — extracts AU plugin manifest, tracks, and metadata from .logicx bundles."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,10 @@ classifiers = [
 ]
 
 [project.scripts]
+# Both names invoke the same CLI. `lpx-toolkit` matches the package name
+# so `uvx lpx-toolkit ...` works without --from; `lpxtool` is the shorter
+# alias once the package is installed.
+lpx-toolkit = "lpx_inspect:cli"
 lpxtool = "lpx_inspect:cli"
 
 [project.urls]
