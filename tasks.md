@@ -10,6 +10,10 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 ### Distribution + UX polish
 
+#### #37 Add --serve mode (local HTTP server for browsing + rollup)
+
+`lpx-inspect --serve [DIR]` spins up a local HTTP server (stdlib `http.server`) on a free port and opens the browser. Provides: (1) Index page listing `.logicx` projects in DIR (default `~/Music/Logic`); (2) Per-project view reusing `render_project_html`; (3) Cross-project rollup with click-through to individual projects; (4) JSON API endpoints for tooling. Static `--html` mode stays as default for ship-and-share use cases. macOS-only. Best moment to introduce: when we ship the rollup HTML view (currently a follow-up to #20).
+
 
 
 `--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
