@@ -19,6 +19,11 @@ from typing import NamedTuple
 
 __version__ = "0.1.0"
 
+# Footer links — used by both the per-project dashboard and the library index.
+_REPO_URL = "https://github.com/rhydlewis/lpx-toolkit"
+_ISSUES_URL = f"{_REPO_URL}/issues"
+_SUPPORT_URL = "https://buymeacoffee.com/rhyd"
+
 # 4CC types stored little-endian in ProjectData.
 AU_TYPES = {
     b"umua": "instrument",      # aumu — Music Device
@@ -1127,37 +1132,48 @@ JSON_SCHEMA_VERSION = 1
 
 _HTML_STYLE = """
 :root {
-  --ink: #0a0b0d; --ink-2: #101216; --ink-3: #15181d; --ink-4: #1c2027;
-  --line: #262a32; --line-2: #2f343d;
-  --bone: #e8e3d8; --bone-dim: #c7c2b6;
-  --grey: #7c8290; --grey-2: #565d6b;
+  /* Apple-influenced dark palette — near-black surfaces, cool greys,
+     amber accent (matches Logic Pro's playhead) for the brand colour. */
+  --ink: #000000; --ink-2: #1d1d1f; --ink-3: #2a2a2d; --ink-4: #36363a;
+  --line: #36363a; --line-2: #48484c;
+  --bone: #f5f5f7; --bone-dim: #c1c1c4;
+  --grey: #86868b; --grey-2: #5e5e63;
   --amber: #ff8a3c; --amber-dim: #b35e22; --copper: #c87341;
-  --phosphor: #7af0c1; --phosphor-d: #2d8a66;
+  --phosphor: #6ee7b7; --phosphor-d: #2d8a66;
   --warn: #ff5d55; --warn-d: #8a2520;
   --violet: #b69cff;
+  --link: #2997ff;
+
+  --font-text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", monospace;
 }
 :root[data-theme="light"] {
-  --ink: #fbf7ec; --ink-2: #f3ecdb; --ink-3: #e9e0c8; --ink-4: #ddd1b5;
-  --line: #c9bda1; --line-2: #b3a888;
-  --bone: #1a1c20; --bone-dim: #3c4049;
-  --grey: #5e6471; --grey-2: #828896;
+  --ink: #ffffff; --ink-2: #fbfbfd; --ink-3: #f5f5f7; --ink-4: #ebebed;
+  --line: #d2d2d7; --line-2: #aeaeb2;
+  --bone: #1d1d1f; --bone-dim: #424245;
+  --grey: #6e6e73; --grey-2: #86868b;
   --amber: #c4571a; --amber-dim: #8f3d10; --copper: #a55224;
   --phosphor: #1f7d56; --phosphor-d: #145138;
   --warn: #b8261e; --warn-d: #7a160f;
   --violet: #6b48d4;
+  --link: #0066cc;
 }
 body, .sheet, .tracks, .fx, .vendor-row .bar, .phantom, .vendor-body {
   transition: background-color .25s ease, color .25s ease, border-color .25s ease;
 }
 
-.theme-toggle {
+.topbar {
   position: fixed; top: 18px; right: 18px;
+  display: flex; align-items: center; gap: 10px;
+  z-index: 100;
+}
+.theme-toggle {
   width: 32px; height: 32px; border-radius: 50%;
   border: 1px solid var(--line-2); background: var(--ink-2);
   color: var(--bone-dim); cursor: pointer;
   font-size: 14px; line-height: 1; padding: 0;
   display: flex; align-items: center; justify-content: center;
-  z-index: 100;
   transition: background-color .15s, color .15s, border-color .15s;
 }
 .theme-toggle:hover {
@@ -1166,34 +1182,91 @@ body, .sheet, .tracks, .fx, .vendor-row .bar, .phantom, .vendor-body {
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 13px; line-height: 1.45;
+  font-family: var(--font-text);
+  font-size: 14px; line-height: 1.5;
   color: var(--bone); background: var(--ink);
-  background-image:
-    radial-gradient(1200px 600px at 80% -10%, rgba(255,138,60,.06), transparent 60%),
-    radial-gradient(900px 500px at -10% 110%, rgba(122,240,193,.04), transparent 60%);
   -webkit-font-smoothing: antialiased;
-  min-height: 100vh; padding: 32px;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh; padding: 40px 32px;
+  font-feature-settings: "ss01", "cv11";
 }
 .h-display {
-  font-family: "Fraunces", "Iowan Old Style", serif;
-  font-style: italic; font-weight: 300;
-  font-size: 44px; line-height: 1.02; letter-spacing: -0.025em;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 56px; line-height: 1.05; letter-spacing: -0.035em;
   color: var(--bone); margin: 0 0 8px;
+  word-break: break-word;
 }
-.h-display em { color: var(--amber); font-style: italic; }
+.h-display .brand-suffix {
+  font-size: 24px; font-weight: 500; letter-spacing: -0.02em;
+  color: var(--grey); margin-left: 14px;
+  white-space: nowrap;
+}
+.h-display .brand-suffix em {
+  color: var(--amber); font-style: normal; font-weight: 600;
+}
 .h-sub {
-  font-size: 12px; color: var(--grey);
-  letter-spacing: .04em; margin: 0 0 28px;
+  font-family: var(--font-text);
+  font-size: 14px; color: var(--grey);
+  letter-spacing: -0.005em; line-height: 1.4;
+  margin: 0 0 36px; font-weight: 400;
+  word-break: break-word;
+}
+.h-sub .path {
+  font-family: var(--font-mono);
+  font-size: 12px; color: var(--grey-2);
 }
 .label {
   display: flex; align-items: center; gap: 10px;
-  font-size: 10px; letter-spacing: .28em; text-transform: uppercase;
-  color: var(--grey); margin: 32px 0 14px;
+  font-family: var(--font-text);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--grey); margin: 36px 0 14px;
 }
 .label::before {
   content: ""; width: 6px; height: 6px;
   background: var(--amber); transform: rotate(45deg);
+}
+
+.tabs {
+  display: flex; gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+.tab {
+  font-family: var(--font-text);
+  font-size: 13px; font-weight: 500;
+  letter-spacing: -0.005em;
+  background: transparent; border: 0; cursor: pointer;
+  color: var(--grey); padding: 10px 14px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+}
+.tab:hover { color: var(--bone-dim); }
+.tab.active {
+  color: var(--bone); border-bottom-color: var(--amber);
+}
+.tab .count {
+  font-family: var(--font-mono);
+  font-size: 10px; font-weight: 500;
+  color: var(--grey-2); margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.tab.active .count { color: var(--bone-dim); }
+.tab-panel { display: block; }
+.tab-panel.hidden { display: none; }
+.tab-panel .section-title {
+  font-family: var(--font-text);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--grey); margin: 24px 0 10px;
+}
+.tab-panel .section-title:first-child { margin-top: 0; }
+.tab-empty {
+  border: 1px dashed var(--line); padding: 32px;
+  border-radius: 8px; text-align: center;
+  color: var(--grey); font-size: 13px;
 }
 .layout {
   display: grid; grid-template-columns: 320px 1fr;
@@ -1201,27 +1274,61 @@ body {
 }
 @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
 
-.sheet { border: 1px solid var(--line); background: var(--ink-2); }
+.sheet {
+  border: 1px solid var(--line); background: var(--ink-2);
+  border-radius: 8px; overflow: hidden;
+}
 .sheet-row {
   display: grid; grid-template-columns: 110px 1fr; gap: 12px;
-  padding: 10px 14px; border-bottom: 1px dashed var(--line); font-size: 12px;
+  padding: 11px 14px; border-bottom: 1px solid var(--line);
+  font-size: 13px;
 }
 .sheet-row:last-child { border-bottom: none; }
 .sheet-row .k {
-  color: var(--grey); text-transform: uppercase;
-  font-size: 10px; letter-spacing: .18em; align-self: center;
+  color: var(--grey); text-transform: uppercase; font-weight: 600;
+  font-size: 10px; letter-spacing: .12em; align-self: center;
 }
-.sheet-row .v { color: var(--bone); font-variant-numeric: tabular-nums; word-break: break-word; }
-.sheet-row .v .mut { color: var(--grey); }
+.sheet-row .v {
+  color: var(--bone); font-variant-numeric: tabular-nums;
+  word-break: break-word; font-weight: 500;
+}
+.sheet-row .v .mut { color: var(--grey); font-weight: 400; }
 
-.tracks { border: 1px solid var(--line); background: var(--ink-2); }
+.tracks {
+  border: 1px solid var(--line); background: var(--ink-2);
+  border-radius: 8px; overflow: hidden;
+}
 .tracks-head {
   display: grid;
   grid-template-columns: 38px 1.6fr 0.9fr 1fr 2.4fr 70px;
-  gap: 12px; padding: 10px 16px;
-  font-size: 9px; text-transform: uppercase; letter-spacing: .22em;
+  gap: 12px; padding: 12px 16px;
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .12em;
   color: var(--grey); border-bottom: 1px solid var(--line); background: var(--ink-3);
 }
+.track-list-head {
+  grid-template-columns: 38px 2fr 1fr 80px 80px;
+}
+.track-list .tl-row {
+  grid-template-columns: 38px 2fr 1fr 80px 80px;
+}
+.track-list .tl-cell {
+  text-align: right; font-variant-numeric: tabular-nums;
+  font-size: 12px; color: var(--bone);
+}
+.track-list .tl-cell .mono {
+  font-family: var(--font-mono); color: var(--bone); font-weight: 500;
+}
+.track-list .tl-cell .mut { color: var(--grey-2); }
+.track-list .kind {
+  display: flex; align-items: center; gap: 8px;
+}
+.track-list .kind .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--phosphor); flex-shrink: 0;
+}
+.track-list .kind .dot.audio { background: var(--violet); }
+.track-list .kind .dot.empty { background: var(--grey-2); }
 .track {
   display: grid;
   grid-template-columns: 38px 1.6fr 0.9fr 1fr 2.4fr 70px;
@@ -1229,17 +1336,24 @@ body {
   border-bottom: 1px solid var(--line); align-items: center;
 }
 .track:last-child { border-bottom: none; }
-.track .idx { font-size: 10px; color: var(--grey); letter-spacing: .14em; }
-.track .name { font-size: 13px; color: var(--bone); }
+.track .idx {
+  font-family: var(--font-mono);
+  font-size: 11px; color: var(--grey); letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.track .name {
+  font-size: 14px; color: var(--bone); font-weight: 500;
+  letter-spacing: -0.005em;
+}
 .track .name .sub {
-  display: block; font-size: 10px; color: var(--grey);
-  letter-spacing: .15em; text-transform: uppercase; margin-top: 2px;
+  display: block; font-size: 10px; color: var(--grey); font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase; margin-top: 3px;
 }
 .track .kind {
-  font-size: 10px; color: var(--bone-dim);
-  text-transform: uppercase; letter-spacing: .18em;
+  font-size: 10px; color: var(--bone-dim); font-weight: 500;
+  text-transform: uppercase; letter-spacing: .12em;
 }
-.track .instr { font-size: 12px; color: var(--bone); display: flex; align-items: center; gap: 8px; }
+.track .instr { font-size: 13px; color: var(--bone); display: flex; align-items: center; gap: 8px; }
 .track .instr .dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--phosphor); flex-shrink: 0;
@@ -1248,33 +1362,38 @@ body {
 .track .instr .dot.empty { background: var(--grey-2); }
 .chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .fx {
+  font-family: var(--font-mono);
   font-size: 11px; padding: 4px 8px;
   border: 1px solid var(--line-2); color: var(--bone-dim);
   background: var(--ink-3); white-space: nowrap;
+  border-radius: 4px;
 }
 .fx .vendor {
-  color: var(--grey); font-size: 9px;
-  text-transform: uppercase; letter-spacing: .18em; margin-right: 5px;
+  font-family: var(--font-mono);
+  color: var(--grey); font-size: 9px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .14em; margin-right: 5px;
 }
 .chain-arrow { color: var(--grey-2); font-size: 10px; user-select: none; }
 .track .stats-mini {
   text-align: right; font-size: 10px; color: var(--grey);
-  letter-spacing: .1em; font-variant-numeric: tabular-nums;
+  font-weight: 500; letter-spacing: .04em;
+  font-variant-numeric: tabular-nums; text-transform: uppercase;
 }
 .track .stats-mini b {
-  color: var(--bone); font-weight: 500; font-size: 13px; display: block;
+  color: var(--bone); font-weight: 600; font-size: 14px; display: block;
+  font-feature-settings: "tnum";
 }
 
 .vendor-row {
   display: grid; grid-template-columns: 1fr auto auto;
-  align-items: center; gap: 10px; padding: 7px 14px;
-  font-size: 12px; border-bottom: 1px dashed var(--line);
+  align-items: center; gap: 10px; padding: 9px 14px;
+  font-size: 13px; border-bottom: 1px solid var(--line);
 }
 .vendor-row:last-child { border-bottom: none; }
-.vendor-row .name { color: var(--bone-dim); }
+.vendor-row .name { color: var(--bone-dim); font-weight: 500; }
 .vendor-row .bar {
   width: 90px; height: 6px; background: var(--ink-3);
-  border: 1px solid var(--line); position: relative;
+  border-radius: 3px; position: relative; overflow: hidden;
 }
 .vendor-row .bar::after {
   content: ""; position: absolute; inset: 0;
@@ -1282,54 +1401,76 @@ body {
   background: linear-gradient(90deg, var(--amber), var(--copper));
 }
 .vendor-row .count {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; color: var(--bone);
-  width: 24px; text-align: right;
+  font-weight: 500; width: 28px; text-align: right;
 }
 
 .phantom-card {
   margin-top: 12px; border: 1px dashed var(--warn-d);
-  background:
-    repeating-linear-gradient(135deg, transparent 0 14px, rgba(255,93,85,.025) 14px 15px),
-    var(--ink-2);
+  border-radius: 8px;
+  background: var(--ink-2);
   padding: 22px 24px;
 }
 .phantom-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 8px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
 }
 .phantom {
-  border: 1px dashed var(--line-2); padding: 10px 12px;
-  background: rgba(0,0,0,.25); font-size: 11px;
+  border: 1px solid var(--line); padding: 12px 14px;
+  border-radius: 6px;
+  background: var(--ink-3); font-size: 12px;
 }
-.phantom .pname { color: var(--bone-dim); font-size: 12px; margin-bottom: 4px; }
+.phantom .pname {
+  color: var(--bone); font-size: 13px; font-weight: 500;
+  margin-bottom: 6px;
+}
 .phantom .pmeta {
+  font-family: var(--font-mono);
   color: var(--grey); font-size: 10px;
-  letter-spacing: .12em; text-transform: uppercase;
+  letter-spacing: .04em;
   display: flex; gap: 8px;
 }
-.phantom .pmeta .pill { border: 1px solid var(--line-2); padding: 0 5px; }
+.phantom .pmeta .pill {
+  border: 1px solid var(--line-2); padding: 1px 6px;
+  border-radius: 3px;
+}
 
 .warning {
-  border-left: 2px solid var(--warn); padding: 10px 12px;
-  background: rgba(255,93,85,.04); margin-bottom: 8px; font-size: 12px;
+  border-left: 3px solid var(--warn); padding: 12px 14px;
+  background: var(--ink-2); margin-bottom: 8px; font-size: 13px;
+  border-radius: 0 6px 6px 0;
 }
 .warning.notice {
-  border-left-color: var(--amber); background: rgba(255,138,60,.04);
+  border-left-color: var(--amber);
 }
 .warning .wt {
-  font-size: 9px; letter-spacing: .25em; text-transform: uppercase;
-  color: var(--warn); margin-bottom: 4px;
+  font-size: 10px; font-weight: 600; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--warn); margin-bottom: 4px;
 }
 .warning.notice .wt { color: var(--amber); }
-.warning p { margin: 0; color: var(--bone-dim); font-size: 12px; line-height: 1.45; }
-.warning code { color: var(--phosphor); font-size: 11px; }
+.warning p { margin: 0; color: var(--bone-dim); font-size: 13px; line-height: 1.5; }
+.warning code {
+  font-family: var(--font-mono); color: var(--phosphor);
+  font-size: 12px;
+}
 
 .footer {
-  margin-top: 48px; padding-top: 14px;
+  margin-top: 56px; padding-top: 18px;
   border-top: 1px solid var(--line);
-  font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
+  font-family: var(--font-text);
+  font-size: 12px; font-weight: 400; letter-spacing: -0.005em;
   color: var(--grey);
 }
+.footer a {
+  color: var(--grey); text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color .15s, border-color .15s;
+}
+.footer a:hover {
+  color: var(--bone-dim); border-bottom-color: var(--line-2);
+}
+.footer .sep { color: var(--grey-2); margin: 0 6px; }
 
 /* Vendor drill-down (expandable rows) */
 details.vendor-expandable { display: block; padding: 0; }
@@ -1337,66 +1478,69 @@ details.vendor-expandable summary {
   position: relative;
   display: grid; grid-template-columns: 1fr auto auto;
   align-items: center; gap: 10px;
-  padding: 7px 14px 7px 32px;          /* room for the absolute chevron */
-  font-size: 12px; cursor: pointer; list-style: none;
-  border-bottom: 1px dashed var(--line);
+  padding: 9px 14px 9px 32px;          /* room for the absolute chevron */
+  font-size: 13px; cursor: pointer; list-style: none;
+  border-bottom: 1px solid var(--line);
 }
 details.vendor-expandable summary::-webkit-details-marker { display: none; }
-/* Position the chevron absolutely so it doesn't participate in the grid
-   (a grid `::before` would steal the first column and push every other
-   cell one slot to the right). */
 details.vendor-expandable summary::before {
   content: "▸"; color: var(--grey-2);
   position: absolute; left: 14px; top: 50%;
   transform: translateY(-50%);
   transition: transform .15s;
+  font-size: 11px;
 }
 details[open].vendor-expandable summary::before {
   transform: translateY(-50%) rotate(90deg);
 }
-details.vendor-expandable .name { color: var(--bone-dim); }
+details.vendor-expandable .name { color: var(--bone-dim); font-weight: 500; }
 details.vendor-expandable .bar {
   width: 90px; height: 6px; background: var(--ink-3);
-  border: 1px solid var(--line); position: relative;
+  border-radius: 3px; position: relative; overflow: hidden;
 }
 details.vendor-expandable .bar::after {
   content: ""; position: absolute; inset: 0; width: var(--w, 30%);
   background: linear-gradient(90deg, var(--amber), var(--copper));
 }
 details.vendor-expandable .count {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums; color: var(--bone);
-  width: 24px; text-align: right;
+  font-weight: 500; width: 28px; text-align: right;
 }
-.vendor-body { padding: 8px 14px 12px; background: var(--ink-3); }
+.vendor-body { padding: 10px 14px 14px; background: var(--ink-3); }
 .vendor-section { margin-top: 6px; }
 .vendor-section-title {
-  font-size: 9px; text-transform: uppercase; letter-spacing: .22em;
-  color: var(--grey); margin: 8px 0 6px;
+  font-family: var(--font-text);
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--grey); margin: 10px 0 6px;
 }
 .vendor-plugin {
   display: flex; align-items: center; gap: 8px;
-  font-size: 12px; padding: 3px 0;
+  font-size: 13px; padding: 4px 0;
   color: var(--bone);
 }
-.vendor-plugin .dot {
-  width: 6px; height: 6px; border-radius: 50%;
-}
+.vendor-plugin .dot { width: 6px; height: 6px; border-radius: 50%; }
 .vendor-plugin.used .dot { background: var(--phosphor); }
 .vendor-plugin.unused .dot { background: var(--grey-2); }
 .vendor-plugin.unused { color: var(--grey); }
-.vendor-plugin .vc-meta { color: var(--grey); font-size: 10px; }
-.vendor-empty { color: var(--grey); font-style: italic; padding: 4px 0; }
-
-/* Reveal-in-Finder button */
-.open-bar { margin: 0 0 24px; }
-a.open-btn {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-size: 11px; letter-spacing: .18em;
-  text-transform: uppercase; color: var(--ink); background: var(--amber);
-  border: 1px solid var(--amber); padding: 8px 14px;
-  text-decoration: none; transition: background .15s;
+.vendor-plugin .vc-meta {
+  font-family: var(--font-mono);
+  color: var(--grey); font-size: 10px;
 }
-a.open-btn:hover { background: var(--bone); border-color: var(--bone); }
+.vendor-empty { color: var(--grey); font-style: italic; padding: 4px 0; font-size: 12px; }
+
+/* Reveal-in-Finder button — sits in the topbar next to the theme toggle */
+a.open-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-text);
+  font-size: 12px; font-weight: 500; letter-spacing: -0.005em;
+  color: #ffffff; background: var(--link);
+  border: 1px solid var(--link); padding: 6px 14px;
+  border-radius: 980px; height: 32px;
+  text-decoration: none; transition: background .15s, border-color .15s;
+}
+a.open-btn:hover { background: #1d7fff; border-color: #1d7fff; }
 """
 
 
@@ -1459,6 +1603,49 @@ def _render_chain(midi_fx: list, audio_fx: list) -> str:
             chips.append('<span class="chain-arrow">›</span>')
         chips.append(_render_fx(fx))
     return f'<div class="chain">{"".join(chips)}</div>' if chips else '<div class="chain"></div>'
+
+
+def _render_track_list_table(items: list[dict]) -> str:
+    """Render the registry-based track inventory as a styled table.
+
+    Each entry comes from `track_list` in the JSON payload and carries
+    `name`, `kind`, `track_id`, `strip_id`, `region_count`. This is the
+    authoritative track inventory — even projects with no plugin chains
+    still have tracks here, so the dashboard never shows a blank section.
+    """
+    if not items:
+        return ""
+    parts = [
+        '<div class="tracks track-list">',
+        '<div class="tracks-head track-list-head">',
+        '<div>#</div><div>Name</div><div>Type</div>'
+        '<div style="text-align:right;">Strip</div>'
+        '<div style="text-align:right;">Regions</div>',
+        '</div>',
+    ]
+    for i, item in enumerate(items, 1):
+        name = _e(item.get("name", "?"))
+        kind = item.get("kind", "?")
+        dot_class = "audio" if kind == "audio" else "empty" if kind in ("aux", "bus") else ""
+        strip_id = item.get("strip_id")
+        strip_label = (
+            f'<span class="mono">{int(strip_id)}</span>'
+            if isinstance(strip_id, int) and strip_id < 1000
+            else '<span class="mut">—</span>'
+        )
+        regions = item.get("region_count", 0)
+        parts.append(
+            f'<div class="track tl-row">'
+            f'<div class="idx">{i:02d}</div>'
+            f'<div class="name">{name}</div>'
+            f'<div class="kind"><span class="dot {dot_class}"></span>{_e(kind)}</div>'
+            f'<div class="tl-cell">{strip_label}</div>'
+            f'<div class="tl-cell">'
+            f'<span class="mono">{int(regions)}</span></div>'
+            f'</div>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
 
 
 def _render_tracks_table(tracks: list[dict]) -> str:
@@ -1694,16 +1881,36 @@ def _render_diagnostics(warnings: list[dict]) -> str:
     return "".join(parts)
 
 
+def _render_footer(suffix: str = "") -> str:
+    """Shared footer for both the per-project dashboard and the library
+    index. `suffix` lets the caller append a context label (e.g.
+    'serving locally') before the link list.
+    """
+    extra = f' <span class="sep">·</span> {_e(suffix)}' if suffix else ''
+    sep = ' <span class="sep">·</span> '
+    link = lambda url, label: (
+        f'<a href="{url}" target="_blank" rel="noopener noreferrer">{label}</a>'
+    )
+    return (
+        f'<footer class="footer">'
+        f'lpx-toolkit <span class="sep">·</span> read-only{extra}'
+        f'{sep}{link(_REPO_URL, "GitHub")}'
+        f'{sep}{link(_ISSUES_URL, "Report an issue")}'
+        f'{sep}{link(_SUPPORT_URL, "Buy me a coffee")}'
+        f'</footer>'
+    )
+
+
 def _render_open_bar(project_path: str | None) -> str:
-    """Header row with a 'Reveal in Finder' button linking to the project
-    bundle via file:// URL. Empty when no path is supplied."""
+    """Reveal-in-Finder button (file:// link to the project bundle).
+    Empty when no path is supplied. Rendered into the fixed topbar
+    next to the theme toggle.
+    """
     if not project_path:
         return ""
     file_url = f"file://{project_path}"
     return (
-        f'<div class="open-bar">'
         f'<a class="open-btn" href="{_e(file_url)}">Reveal in Finder</a>'
-        f'</div>'
     )
 
 
@@ -1727,6 +1934,7 @@ def render_project_html(
 
     metadata_html = _render_metadata_sheet(p)
     tracks_html = _render_tracks_table(payload.get("tracks", []))
+    track_list_html = _render_track_list_table(payload.get("track_list", []))
     vendors_html = _render_vendor_rollup(
         payload.get("vendors", {}),
         payload=payload,
@@ -1750,37 +1958,99 @@ def render_project_html(
         'aria-label="Toggle light/dark theme" title="Toggle light/dark theme">'
         '◐</button>'
     )
-    toggle_script = (
+    behaviour_script = (
         '<script>(function(){'
-        "var b=document.getElementById('theme-toggle');if(!b)return;"
-        "b.addEventListener('click',function(){"
+        # theme toggle
+        "var b=document.getElementById('theme-toggle');"
+        "if(b){b.addEventListener('click',function(){"
         'var r=document.documentElement;'
         "var next=r.getAttribute('data-theme')==='light'?'dark':'light';"
         "r.setAttribute('data-theme',next);"
         "try{localStorage.setItem('lpxtool-theme',next);}catch(e){}"
-        '});})();</script>'
+        '});}'
+        # tab switcher (persists last tab in localStorage)
+        "var tabs=document.querySelectorAll('.tab');"
+        "var panels=document.querySelectorAll('.tab-panel');"
+        "function show(name){"
+        "tabs.forEach(function(t){t.classList.toggle('active',t.dataset.tab===name);});"
+        "panels.forEach(function(p){p.classList.toggle('hidden',p.dataset.panel!==name);});"
+        "try{localStorage.setItem('lpxtool-tab',name);}catch(e){}"
+        "}"
+        # restore saved tab on load — only if the panel exists
+        "try{"
+        "var saved=localStorage.getItem('lpxtool-tab');"
+        "if(saved&&document.querySelector('[data-panel=\"'+saved+'\"]'))show(saved);"
+        "}catch(e){}"
+        "tabs.forEach(function(t){t.addEventListener('click',function(){show(t.dataset.tab);});});"
+        '})();</script>'
+    )
+
+    # Tab counts for the tab labels.
+    n_tracks = len(payload.get("track_list", []))
+    n_plugin_chains = len(payload.get("tracks", []))
+    n_diag = len(payload.get("diagnostics", [])) + len(payload.get("phantom_plugins", []))
+
+    def _count_pill(n: int) -> str:
+        return f'<span class="count">{int(n)}</span>' if n else ''
+
+    tabs_html = (
+        '<div class="tabs" role="tablist">'
+        f'<button class="tab active" data-tab="tracks" type="button">Tracks{_count_pill(n_tracks)}</button>'
+        f'<button class="tab" data-tab="plugins" type="button">Plugin chains{_count_pill(n_plugin_chains)}</button>'
+        f'<button class="tab" data-tab="diagnostics" type="button">Diagnostics{_count_pill(n_diag)}</button>'
+        '</div>'
+    )
+
+    tracks_panel = (
+        '<div class="tab-panel" data-panel="tracks">'
+        + (track_list_html or '<div class="tab-empty">No tracks in this project.</div>')
+        + '</div>'
+    )
+    plugins_panel = (
+        '<div class="tab-panel hidden" data-panel="plugins">'
+        + (tracks_html or '<div class="tab-empty">No active plugin chains in this project.</div>')
+        + '</div>'
+    )
+    diagnostics_blocks = []
+    if phantoms_html:
+        diagnostics_blocks.append(
+            f'<div class="section-title">Phantom plug-ins</div>{phantoms_html}'
+        )
+    if diagnostics_html:
+        diagnostics_blocks.append(
+            f'<div class="section-title">Warnings</div>{diagnostics_html}'
+        )
+    if not diagnostics_blocks:
+        diagnostics_blocks.append(
+            '<div class="tab-empty">No diagnostics — this project looks clean.</div>'
+        )
+    diagnostics_panel = (
+        '<div class="tab-panel hidden" data-panel="diagnostics">'
+        + "".join(diagnostics_blocks)
+        + '</div>'
+    )
+
+    path_html = (
+        f' · <span class="path">{_e(project_path)}</span>'
+        if project_path else ''
     )
 
     return (
         f'<!doctype html>\n<html lang="en"><head>'
         f'<meta charset="utf-8" />'
         f'<meta name="viewport" content="width=device-width, initial-scale=1" />'
-        f'<title>lpx-toolkit · {_e(project_name)}</title>'
+        f'<title>{_e(project_name)} · lpx-toolkit</title>'
         f'{boot_script}'
-        f'<link rel="preconnect" href="https://fonts.googleapis.com" />'
-        f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
-        f'<link href="https://fonts.googleapis.com/css2?'
-        f'family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&'
-        f'family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&'
-        f'display=swap" rel="stylesheet" />'
         f'<style>{_HTML_STYLE}</style>'
         f'</head><body>'
-        f'{toggle_button}'
-        f'<h1 class="h-display"><em>lpx</em>·toolkit</h1>'
+        f'<div class="topbar">{open_bar_html}{toggle_button}</div>'
+        f'<h1 class="h-display">'
+        f'{_e(project_name)}'
+        f'<span class="brand-suffix">· <em>lpx</em>·toolkit</span>'
+        f'</h1>'
         f'<p class="h-sub">'
-        f'{_e(project_name)} · {track_count} tracks · {plugin_count} plug-ins'
+        f'{track_count} tracks · {plugin_count} plug-ins{path_html}'
         f'</p>'
-        f'{open_bar_html}'
         f'<div class="layout">'
         f'<aside>'
         f'<div class="label">Project</div>'
@@ -1788,13 +2058,14 @@ def render_project_html(
         f'{("<div class=\"label\">Manufacturers</div>" + vendors_html) if vendors_html else ""}'
         f'</aside>'
         f'<section>'
-        f'{("<div class=\"label\">Tracks</div>" + tracks_html) if tracks_html else ""}'
-        f'{("<div class=\"label\">Phantom plug-ins</div>" + phantoms_html) if phantoms_html else ""}'
-        f'{("<div class=\"label\">Diagnostics</div>" + diagnostics_html) if diagnostics_html else ""}'
+        f'{tabs_html}'
+        f'{tracks_panel}'
+        f'{plugins_panel}'
+        f'{diagnostics_panel}'
         f'</section>'
         f'</div>'
-        f'<footer class="footer">lpx-toolkit · read-only</footer>'
-        f'{toggle_script}'
+        f'{_render_footer()}'
+        f'{behaviour_script}'
         f'</body></html>\n'
     )
 
@@ -2253,30 +2524,36 @@ def main_rollup(paths: list[str]) -> None:
 
 _SERVE_INDEX_STYLE = """
 .proj-grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 12px; max-width: 1400px; margin: 0 auto;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px; max-width: 1400px; margin: 0 auto;
 }
 a.proj-card {
-  display: block; padding: 18px 20px;
+  display: block; padding: 20px 22px;
   border: 1px solid var(--line); background: var(--ink-2);
+  border-radius: 10px;
   text-decoration: none; color: var(--bone);
-  transition: background-color .15s, border-color .15s;
+  transition: background-color .15s, border-color .15s, transform .15s;
 }
-a.proj-card:hover { background: var(--ink-3); border-color: var(--amber-dim); }
+a.proj-card:hover {
+  background: var(--ink-3); border-color: var(--amber-dim);
+  transform: translateY(-1px);
+}
 .proj-card .proj-name {
-  font-family: "Fraunces", "Iowan Old Style", serif;
-  font-style: italic; font-weight: 400;
-  font-size: 22px; line-height: 1.1; color: var(--bone);
-  margin-bottom: 6px; word-break: break-word;
+  font-family: var(--font-display);
+  font-weight: 600; font-size: 17px;
+  line-height: 1.25; letter-spacing: -0.012em;
+  color: var(--bone); margin-bottom: 6px; word-break: break-word;
 }
 .proj-card .proj-path {
-  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  font-family: var(--font-mono);
+  font-size: 11px; letter-spacing: 0;
   color: var(--grey); word-break: break-all;
 }
 .proj-empty {
-  border: 1px dashed var(--line); padding: 28px; text-align: center;
-  color: var(--grey); font-size: 12px; letter-spacing: .14em;
-  text-transform: uppercase;
+  border: 1px dashed var(--line); padding: 32px;
+  border-radius: 10px;
+  text-align: center;
+  color: var(--grey); font-size: 13px; letter-spacing: .04em;
 }
 """
 
@@ -2347,20 +2624,14 @@ def _render_serve_index(directory: Path, projects: list[Path]) -> str:
         '<meta name="viewport" content="width=device-width, initial-scale=1" />'
         '<title>lpx-toolkit · library</title>'
         f'{boot_script}'
-        '<link rel="preconnect" href="https://fonts.googleapis.com" />'
-        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
-        '<link href="https://fonts.googleapis.com/css2?'
-        'family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&'
-        'family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&'
-        'display=swap" rel="stylesheet" />'
         f'<style>{_HTML_STYLE}{_SERVE_INDEX_STYLE}</style>'
         '</head><body>'
-        f'{toggle_button}'
+        f'<div class="topbar">{toggle_button}</div>'
         '<h1 class="h-display"><em>lpx</em>·toolkit</h1>'
-        f'<p class="h-sub">{_e(str(directory))} · '
+        f'<p class="h-sub"><span class="path">{_e(str(directory))}</span> · '
         f'{len(projects)} project{"s" if len(projects) != 1 else ""}</p>'
         f'{body}'
-        '<footer class="footer">lpx-toolkit · read-only · serving locally</footer>'
+        f'{_render_footer(suffix="serving locally")}'
         f'{toggle_script}'
         '</body></html>\n'
     )

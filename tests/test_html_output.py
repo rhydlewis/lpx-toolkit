@@ -61,11 +61,16 @@ def test_render_includes_inline_style_block(tmp_path):
     assert "</style>" in out
 
 
-def test_render_loads_google_fonts(tmp_path):
-    """Pixel-faithful match to mockup uses Fraunces + IBM Plex Mono."""
+def test_render_uses_system_font_stack(tmp_path):
+    """Apple-influenced typography — SF Pro / SF Mono via the system
+    stack rather than fetched web fonts. Self-contained and renders
+    natively on macOS."""
     out = _render(tmp_path)
-    assert "Fraunces" in out
-    assert "IBM+Plex+Mono" in out or "IBM Plex Mono" in out
+    assert "-apple-system" in out
+    assert "SF Pro" in out
+    # No Google Fonts dependency
+    assert "fonts.googleapis.com" not in out
+    assert "Fraunces" not in out
 
 
 def test_render_includes_project_name_in_title(tmp_path):
@@ -460,6 +465,186 @@ def test_render_html_works_without_lookup_or_path(tmp_path):
     payload = json.loads(project_to_json(info, lookup={}))
     out = render_project_html(payload)
     assert "</html>" in out
+
+
+# --- footer links ---
+
+def test_render_footer_links_to_github(tmp_path):
+    out = _render(tmp_path)
+    assert "github.com/rhydlewis/lpx-toolkit" in out
+
+
+def test_render_footer_links_to_issues(tmp_path):
+    out = _render(tmp_path)
+    assert "github.com/rhydlewis/lpx-toolkit/issues" in out
+
+
+def test_render_footer_links_to_buymeacoffee(tmp_path):
+    out = _render(tmp_path)
+    assert "buymeacoffee.com/rhyd" in out
+
+
+def test_render_footer_external_links_open_in_new_tab(tmp_path):
+    """External links open in a new tab and drop the window reference
+    for the security/privacy reason `rel='noopener noreferrer'` exists."""
+    out = _render(tmp_path)
+    # At least one external link should carry these attributes
+    assert 'target="_blank"' in out
+    assert "noopener" in out
+
+
+# --- header + topbar restructure ---
+
+def test_render_h1_leads_with_project_name(tmp_path):
+    """The project name is the page title's primary content; the
+    'lpx·toolkit' brand sits as a smaller suffix."""
+    info = parse_project(_make_minimal_bundle(tmp_path, name="my-song"))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload)
+    h1_start = out.find("<h1")
+    h1_end = out.find("</h1>", h1_start)
+    assert h1_start != -1 and h1_end != -1
+    h1 = out[h1_start:h1_end]
+    assert "my-song" in h1
+    # Brand suffix retained, but as a child element so the project
+    # name reads first.
+    assert "lpx" in h1 and "toolkit" in h1
+    assert "brand-suffix" in h1
+
+
+def test_render_h_sub_includes_file_path(tmp_path):
+    """Path to the .logicx bundle appears in the meta line for context."""
+    bundle = _make_minimal_bundle(tmp_path, name="demo")
+    info = parse_project(bundle)
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload, project_path=str(bundle))
+    # The h-sub line carries the path
+    sub_start = out.find('class="h-sub"')
+    sub_end = out.find("</p>", sub_start)
+    assert sub_start != -1
+    sub_block = out[sub_start:sub_end]
+    assert str(bundle) in sub_block
+
+
+def test_render_topbar_contains_reveal_button(tmp_path):
+    """Reveal in Finder lives in the fixed topbar with the theme toggle,
+    not inline below the heading."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload, project_path="/some/path.logicx")
+    topbar_start = out.find('class="topbar"')
+    topbar_end = out.find("</div>", topbar_start)
+    assert topbar_start != -1, "expected a .topbar wrapper"
+    topbar = out[topbar_start:topbar_end]
+    assert "Reveal in Finder" in topbar
+    assert "theme-toggle" in topbar
+
+
+def test_render_topbar_present_without_project_path(tmp_path):
+    """When no project_path is supplied (e.g. for tests / minimal renders)
+    the topbar still renders for the theme toggle, but the Reveal button
+    is absent."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload)
+    assert 'class="topbar"' in out
+    assert "Reveal in Finder" not in out
+
+
+# --- 3-tab content view ---
+
+def test_render_includes_three_tabs(tmp_path):
+    """Tracks / Plugin chains / Diagnostics live behind a tab strip
+    rather than stacking down the page."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload)
+    # Three labelled tab buttons
+    assert 'data-tab="tracks"' in out
+    assert 'data-tab="plugins"' in out
+    assert 'data-tab="diagnostics"' in out
+
+
+def test_render_tab_panels_present(tmp_path):
+    """Each tab has a corresponding panel in the DOM (toggled by the
+    tab JS, not server-rendered)."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload)
+    assert 'data-panel="tracks"' in out
+    assert 'data-panel="plugins"' in out
+    assert 'data-panel="diagnostics"' in out
+
+
+def test_render_diagnostics_tab_holds_phantom_plugins(tmp_path):
+    """Phantom plug-ins are project-health info, so they live in the
+    Diagnostics tab — not as a separate top-level section."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    payload["phantom_plugins"] = [
+        {"display_name": "Ghost", "fingerprint": "aufx/ghst/test",
+         "type": "audio_effect"}
+    ]
+    out = render_project_html(payload)
+    diag_panel_start = out.find('data-panel="diagnostics"')
+    diag_panel_end = out.find('data-panel="', diag_panel_start + 1)
+    if diag_panel_end == -1:
+        # Last panel — search to closing tag of the parent
+        diag_panel_end = out.find('</section>', diag_panel_start)
+    assert diag_panel_start != -1
+    panel_block = out[diag_panel_start:diag_panel_end]
+    assert "Ghost" in panel_block
+
+
+# --- track inventory (registry list) ---
+
+def test_render_shows_track_inventory_when_no_active_tracks(tmp_path):
+    """A project with no plugin chains (e.g. fresh audio tracks) still
+    has tracks in the registry — render them as a list so the dashboard
+    isn't blank for empty projects."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    payload["tracks"] = []
+    payload["track_list"] = [
+        {"name": "Audio 1", "kind": "audio",
+         "track_id": 9, "strip_id": 256, "region_count": 0},
+        {"name": "Lead Vox", "kind": "audio",
+         "track_id": 75, "strip_id": 2, "region_count": 3},
+    ]
+    out = render_project_html(payload)
+    assert "Audio 1" in out
+    assert "Lead Vox" in out
+
+
+def test_render_track_inventory_shows_kind_and_strip(tmp_path):
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    payload["tracks"] = []
+    payload["track_list"] = [
+        {"name": "My Audio", "kind": "audio",
+         "track_id": 9, "strip_id": 5, "region_count": 2},
+    ]
+    out = render_project_html(payload)
+    # kind + strip number visible somewhere in the inventory
+    assert "audio" in out.lower()
+    assert "5" in out  # strip id
+    assert "2" in out  # region count
+
+
+def test_render_shows_tracks_empty_state_when_track_list_empty(tmp_path):
+    """When track_list is empty (e.g. parse failure), the Tracks tab
+    still appears but its panel shows an empty-state message instead
+    of rendering the inventory table."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    payload["tracks"] = []
+    payload["track_list"] = []
+    out = render_project_html(payload)
+    # The Tracks tab is still part of the strip
+    assert 'data-tab="tracks"' in out
+    # But its panel shows an empty state, not a track-list table
+    assert "tab-empty" in out
+    assert "<div class=\"tracks track-list\">" not in out
 
 
 # --- #40 light/dark theme toggle ---
