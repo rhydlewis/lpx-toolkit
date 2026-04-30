@@ -10,10 +10,6 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 ### Distribution + UX polish
 
-#### #20 Rich HTML dashboard output
-
-`--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
-
 
 
 `--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
@@ -171,6 +167,10 @@ Defensive filter for Logic's built-in metronome (`aumu/klop/appl`). The current 
 #### #22 Phantom plugin distinction ✓
 
 `find_phantom_aus()` returns AUs in `ProjectData` that aren't attached to any active user track — sources include undo history, deleted tracks, alternative takes. Deduped by fingerprint; the metronome is filtered by default; `include_metronome=True` overrides. JSON exposes as top-level `phantom_plugins` array; text under `=== PHANTOM PLUGINS ===`. 6 tests in `tests/test_phantom_plugins.py`. Inspector mockup highlights this as a key differentiator for "is this project clean?".
+
+#### #20 Rich HTML dashboard output ✓
+
+`--html` flag generates a self-contained HTML dashboard styled to match `inspector-mockup.html` and opens it in the macOS default browser via `open`. `render_project_html()` consumes the JSON payload (single source of truth for all data sections). HTML lands in `tempfile.gettempdir()` named `lpx-toolkit-<slug>.html`. Pixel-faithful palette: dark theme, Fraunces italic display + IBM Plex Mono via Google Fonts, amber/phosphor accents, project metadata sheet, tracks table with FX chains, vendor rollup bar chart, phantom plugin grid (when present), diagnostics warning blocks. Verified on busy-living: 56 tracks, 7 vendors, 36 diagnostics rendered correctly. 12 tests in `tests/test_html_output.py` covering structure, escaping, every section. Rollup HTML deferred to a follow-up.
 
 #### #28 Strict region→strip bridge ✓ (audio strip mapping)
 

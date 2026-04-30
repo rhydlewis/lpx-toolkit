@@ -1115,6 +1115,416 @@ def summarise_bplists(blobs: list[BPlistBlob]) -> None:
 JSON_SCHEMA_VERSION = 1
 
 
+# ---------------------------------------------------------------------------
+# HTML dashboard (#20)
+# Distilled from inspector-mockup.html — palette, typography, layout
+# primitives. Fonts loaded from Google Fonts (degrades gracefully offline).
+# ---------------------------------------------------------------------------
+
+_HTML_STYLE = """
+:root {
+  --ink: #0a0b0d; --ink-2: #101216; --ink-3: #15181d; --ink-4: #1c2027;
+  --line: #262a32; --line-2: #2f343d;
+  --bone: #e8e3d8; --bone-dim: #c7c2b6;
+  --grey: #7c8290; --grey-2: #565d6b;
+  --amber: #ff8a3c; --amber-dim: #b35e22; --copper: #c87341;
+  --phosphor: #7af0c1; --phosphor-d: #2d8a66;
+  --warn: #ff5d55; --warn-d: #8a2520;
+  --violet: #b69cff;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px; line-height: 1.45;
+  color: var(--bone); background: var(--ink);
+  background-image:
+    radial-gradient(1200px 600px at 80% -10%, rgba(255,138,60,.06), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(122,240,193,.04), transparent 60%);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh; padding: 32px;
+}
+.h-display {
+  font-family: "Fraunces", "Iowan Old Style", serif;
+  font-style: italic; font-weight: 300;
+  font-size: 44px; line-height: 1.02; letter-spacing: -0.025em;
+  color: var(--bone); margin: 0 0 8px;
+}
+.h-display em { color: var(--amber); font-style: italic; }
+.h-sub {
+  font-size: 12px; color: var(--grey);
+  letter-spacing: .04em; margin: 0 0 28px;
+}
+.label {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 10px; letter-spacing: .28em; text-transform: uppercase;
+  color: var(--grey); margin: 32px 0 14px;
+}
+.label::before {
+  content: ""; width: 6px; height: 6px;
+  background: var(--amber); transform: rotate(45deg);
+}
+.layout {
+  display: grid; grid-template-columns: 320px 1fr;
+  gap: 32px; max-width: 1400px; margin: 0 auto;
+}
+@media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+.sheet { border: 1px solid var(--line); background: var(--ink-2); }
+.sheet-row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px dashed var(--line); font-size: 12px;
+}
+.sheet-row:last-child { border-bottom: none; }
+.sheet-row .k {
+  color: var(--grey); text-transform: uppercase;
+  font-size: 10px; letter-spacing: .18em; align-self: center;
+}
+.sheet-row .v { color: var(--bone); font-variant-numeric: tabular-nums; word-break: break-word; }
+.sheet-row .v .mut { color: var(--grey); }
+
+.tracks { border: 1px solid var(--line); background: var(--ink-2); }
+.tracks-head {
+  display: grid;
+  grid-template-columns: 38px 1.6fr 0.9fr 1fr 2.4fr 70px;
+  gap: 12px; padding: 10px 16px;
+  font-size: 9px; text-transform: uppercase; letter-spacing: .22em;
+  color: var(--grey); border-bottom: 1px solid var(--line); background: var(--ink-3);
+}
+.track {
+  display: grid;
+  grid-template-columns: 38px 1.6fr 0.9fr 1fr 2.4fr 70px;
+  gap: 12px; padding: 14px 16px;
+  border-bottom: 1px solid var(--line); align-items: center;
+}
+.track:last-child { border-bottom: none; }
+.track .idx { font-size: 10px; color: var(--grey); letter-spacing: .14em; }
+.track .name { font-size: 13px; color: var(--bone); }
+.track .name .sub {
+  display: block; font-size: 10px; color: var(--grey);
+  letter-spacing: .15em; text-transform: uppercase; margin-top: 2px;
+}
+.track .kind {
+  font-size: 10px; color: var(--bone-dim);
+  text-transform: uppercase; letter-spacing: .18em;
+}
+.track .instr { font-size: 12px; color: var(--bone); display: flex; align-items: center; gap: 8px; }
+.track .instr .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--phosphor); flex-shrink: 0;
+}
+.track .instr .dot.audio { background: var(--violet); }
+.track .instr .dot.empty { background: var(--grey-2); }
+.chain { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.fx {
+  font-size: 11px; padding: 4px 8px;
+  border: 1px solid var(--line-2); color: var(--bone-dim);
+  background: var(--ink-3); white-space: nowrap;
+}
+.fx .vendor {
+  color: var(--grey); font-size: 9px;
+  text-transform: uppercase; letter-spacing: .18em; margin-right: 5px;
+}
+.chain-arrow { color: var(--grey-2); font-size: 10px; user-select: none; }
+.track .stats-mini {
+  text-align: right; font-size: 10px; color: var(--grey);
+  letter-spacing: .1em; font-variant-numeric: tabular-nums;
+}
+.track .stats-mini b {
+  color: var(--bone); font-weight: 500; font-size: 13px; display: block;
+}
+
+.vendor-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  align-items: center; gap: 10px; padding: 7px 14px;
+  font-size: 12px; border-bottom: 1px dashed var(--line);
+}
+.vendor-row:last-child { border-bottom: none; }
+.vendor-row .name { color: var(--bone-dim); }
+.vendor-row .bar {
+  width: 90px; height: 6px; background: var(--ink-3);
+  border: 1px solid var(--line); position: relative;
+}
+.vendor-row .bar::after {
+  content: ""; position: absolute; inset: 0;
+  width: var(--w, 30%);
+  background: linear-gradient(90deg, var(--amber), var(--copper));
+}
+.vendor-row .count {
+  font-variant-numeric: tabular-nums; color: var(--bone);
+  width: 24px; text-align: right;
+}
+
+.phantom-card {
+  margin-top: 12px; border: 1px dashed var(--warn-d);
+  background:
+    repeating-linear-gradient(135deg, transparent 0 14px, rgba(255,93,85,.025) 14px 15px),
+    var(--ink-2);
+  padding: 22px 24px;
+}
+.phantom-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+.phantom {
+  border: 1px dashed var(--line-2); padding: 10px 12px;
+  background: rgba(0,0,0,.25); font-size: 11px;
+}
+.phantom .pname { color: var(--bone-dim); font-size: 12px; margin-bottom: 4px; }
+.phantom .pmeta {
+  color: var(--grey); font-size: 10px;
+  letter-spacing: .12em; text-transform: uppercase;
+  display: flex; gap: 8px;
+}
+.phantom .pmeta .pill { border: 1px solid var(--line-2); padding: 0 5px; }
+
+.warning {
+  border-left: 2px solid var(--warn); padding: 10px 12px;
+  background: rgba(255,93,85,.04); margin-bottom: 8px; font-size: 12px;
+}
+.warning.notice {
+  border-left-color: var(--amber); background: rgba(255,138,60,.04);
+}
+.warning .wt {
+  font-size: 9px; letter-spacing: .25em; text-transform: uppercase;
+  color: var(--warn); margin-bottom: 4px;
+}
+.warning.notice .wt { color: var(--amber); }
+.warning p { margin: 0; color: var(--bone-dim); font-size: 12px; line-height: 1.45; }
+.warning code { color: var(--phosphor); font-size: 11px; }
+
+.footer {
+  margin-top: 48px; padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--grey);
+}
+"""
+
+
+def _e(s) -> str:
+    """HTML-escape a value (handles None and non-strings safely)."""
+    if s is None:
+        return ""
+    import html as _html
+    return _html.escape(str(s), quote=True)
+
+
+def _fmt_size(n: int) -> str:
+    """Bytes → human-friendly size."""
+    n = int(n or 0)
+    if n >= 1024 * 1024:
+        return f"{n / 1024 / 1024:.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
+def _render_metadata_sheet(p: dict) -> str:
+    """Project metadata sheet — left column."""
+    rows = [
+        ("name", _e(p.get("name"))),
+        ("key", f"{_e(p.get('key'))} <span class='mut'>{_e(p.get('gender'))}</span>"),
+        ("tempo", f"{_e(p.get('bpm'))} <span class='mut'>BPM</span>"),
+        ("time sig", _e(p.get("time_signature"))),
+        ("sample rate", f"{_e(p.get('sample_rate'))} <span class='mut'>Hz</span>"),
+    ]
+    fr = p.get("frame_rate")
+    if fr:
+        rows.append(("frame rate", f"{_e(fr)} <span class='mut'>fps</span>"))
+    rows.extend([
+        ("tracks", _e(p.get("track_count"))),
+        ("audio files", _e(p.get("audio_file_count"))),
+        ("size", _fmt_size(p.get("bundle_size_bytes", 0))),
+        ("created", _e((p.get("created_at") or "")[:16].replace("T", " "))),
+        ("modified", _e((p.get("modified_at") or "")[:16].replace("T", " "))),
+    ])
+    parts = ['<div class="sheet">']
+    for k, v in rows:
+        parts.append(f'<div class="sheet-row"><div class="k">{_e(k)}</div><div class="v">{v}</div></div>')
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_fx(au: dict) -> str:
+    """One plugin chip in a chain."""
+    vendor = _e(au.get("manufacturer", "")[:4].strip() or "—")
+    name = _e(au.get("display_name") or au.get("fingerprint", "?"))
+    return f'<span class="fx"><span class="vendor">{vendor}</span>{name}</span>'
+
+
+def _render_chain(midi_fx: list, audio_fx: list) -> str:
+    """Render the FX chain (MIDI FX → audio FX) with arrows between."""
+    chips: list[str] = []
+    for fx in (midi_fx or []) + (audio_fx or []):
+        if chips:
+            chips.append('<span class="chain-arrow">›</span>')
+        chips.append(_render_fx(fx))
+    return f'<div class="chain">{"".join(chips)}</div>' if chips else '<div class="chain"></div>'
+
+
+def _render_tracks_table(tracks: list[dict]) -> str:
+    if not tracks:
+        return ""
+    parts = [
+        '<div class="tracks">',
+        '<div class="tracks-head">',
+        '<div>#</div><div>Track</div><div>Type</div>'
+        '<div>Instrument</div><div>Effects chain ›</div>'
+        '<div style="text-align:right;">FX</div>',
+        '</div>',
+    ]
+    for i, t in enumerate(tracks, 1):
+        kind = t.get("kind", "?")
+        dot_class = "audio" if kind == "audio" else "empty" if kind in ("aux", "bus") else ""
+        instr = t.get("instrument")
+        if instr:
+            instr_name = instr.get("resolved_name") or instr.get("display_name", "?")
+            instr_label = _e(instr_name)
+        else:
+            instr_label = '<span style="color:var(--grey)">— audio —</span>'
+        chain = _render_chain(t.get("midi_fx", []), t.get("audio_fx", []))
+        fx_count = len(t.get("midi_fx") or []) + len(t.get("audio_fx") or [])
+        strip_name = _e(t.get("strip_name", "?"))
+        display_name = _e(t.get("display_name", strip_name))
+        sub = strip_name if display_name != strip_name else ""
+        sub_html = f'<span class="sub">{sub}</span>' if sub else ""
+        parts.append(
+            f'<div class="track">'
+            f'<div class="idx">{i:02d}</div>'
+            f'<div class="name">{display_name}{sub_html}</div>'
+            f'<div class="kind">{_e(kind)}</div>'
+            f'<div class="instr"><span class="dot {dot_class}"></span>{instr_label}</div>'
+            f'{chain}'
+            f'<div class="stats-mini"><b>{fx_count}</b>fx</div>'
+            f'</div>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_vendor_rollup(vendors: dict) -> str:
+    if not vendors:
+        return ""
+    max_count = max(vendors.values()) or 1
+    parts = ['<div class="sheet">']
+    for vendor, count in sorted(vendors.items(), key=lambda x: -x[1]):
+        pct = (count / max_count) * 100
+        parts.append(
+            f'<div class="vendor-row">'
+            f'<div class="name">{_e(vendor)}</div>'
+            f'<div class="bar" style="--w:{pct:.0f}%"></div>'
+            f'<div class="count">{count}</div>'
+            f'</div>'
+        )
+    parts.append("</div>")
+    return "".join(parts)
+
+
+def _render_phantoms(phantoms: list[dict]) -> str:
+    if not phantoms:
+        return ""
+    parts = ['<article class="phantom-card">',
+             '<div class="phantom-grid">']
+    for au in phantoms:
+        name = _e(au.get("resolved_name") or au.get("display_name") or au.get("fingerprint"))
+        type_code = _e(au.get("type_code", ""))
+        mfr = _e(au.get("manufacturer", ""))
+        parts.append(
+            f'<div class="phantom">'
+            f'<div class="pname">{name}</div>'
+            f'<div class="pmeta">'
+            f'<span class="pill">{type_code}</span>'
+            f'<span class="pill">{mfr}</span>'
+            f'</div></div>'
+        )
+    parts.append("</div></article>")
+    return "".join(parts)
+
+
+def _render_diagnostics(warnings: list[dict]) -> str:
+    if not warnings:
+        return ""
+    parts = []
+    for w in warnings:
+        kind = w.get("kind", "")
+        track = _e(w.get("track", "?"))
+        if kind == "unresolved_plugin":
+            cls = "warning"
+            wt = "⚠ unresolved plugin"
+            body = (f"Track <i>{track}</i> references "
+                    f"<code>{_e(w.get('fingerprint'))}</code>"
+                    f" (display: <code>{_e(w.get('display_name'))}</code>), "
+                    f"but no installed Audio Unit matches.")
+        elif kind == "duplicate_consecutive_fx":
+            cls = "warning notice"
+            wt = "notice · duplicate fx"
+            body = (f"Track <i>{track}</i> has two consecutive "
+                    f"<code>{_e(w.get('display_name'))}</code> instances. "
+                    f"Likely intentional but flagged for review.")
+        elif kind == "truncated_name":
+            cls = "warning notice"
+            wt = "notice · truncation"
+            body = (f"Binary name <code>{_e(w.get('binary_name'))}</code> "
+                    f"truncated; resolved as "
+                    f"<code>{_e(w.get('resolved_name'))}</code> on track <i>{track}</i>.")
+        else:
+            cls = "warning notice"
+            wt = _e(kind)
+            body = ""
+        parts.append(f'<div class="{cls}"><div class="wt">{wt}</div><p>{body}</p></div>')
+    return "".join(parts)
+
+
+def render_project_html(payload: dict) -> str:
+    """Render a JSON payload (from `project_to_json`) to a self-contained
+    HTML dashboard styled to match `inspector-mockup.html`."""
+    p = payload.get("project", {})
+    project_name = p.get("name", "Untitled")
+
+    metadata_html = _render_metadata_sheet(p)
+    tracks_html = _render_tracks_table(payload.get("tracks", []))
+    vendors_html = _render_vendor_rollup(payload.get("vendors", {}))
+    phantoms_html = _render_phantoms(payload.get("phantom_plugins", []))
+    diagnostics_html = _render_diagnostics(payload.get("diagnostics", []))
+
+    track_count = p.get("track_count", 0)
+    plugin_count = sum(payload.get("vendors", {}).values())
+
+    return (
+        f'<!doctype html>\n<html lang="en"><head>'
+        f'<meta charset="utf-8" />'
+        f'<meta name="viewport" content="width=device-width, initial-scale=1" />'
+        f'<title>lpx-toolkit · {_e(project_name)}</title>'
+        f'<link rel="preconnect" href="https://fonts.googleapis.com" />'
+        f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
+        f'<link href="https://fonts.googleapis.com/css2?'
+        f'family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&'
+        f'family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&'
+        f'display=swap" rel="stylesheet" />'
+        f'<style>{_HTML_STYLE}</style>'
+        f'</head><body>'
+        f'<h1 class="h-display"><em>lpx</em>·toolkit</h1>'
+        f'<p class="h-sub">'
+        f'{_e(project_name)} · {track_count} tracks · {plugin_count} plug-ins'
+        f'</p>'
+        f'<div class="layout">'
+        f'<aside>'
+        f'<div class="label">Project</div>'
+        f'{metadata_html}'
+        f'{("<div class=\"label\">Manufacturers</div>" + vendors_html) if vendors_html else ""}'
+        f'</aside>'
+        f'<section>'
+        f'{("<div class=\"label\">Tracks</div>" + tracks_html) if tracks_html else ""}'
+        f'{("<div class=\"label\">Phantom plug-ins</div>" + phantoms_html) if phantoms_html else ""}'
+        f'{("<div class=\"label\">Diagnostics</div>" + diagnostics_html) if diagnostics_html else ""}'
+        f'</section>'
+        f'</div>'
+        f'<footer class="footer">lpx-toolkit · read-only</footer>'
+        f'</body></html>\n'
+    )
+
+
 # Logic loads Klopfgeist (its built-in metronome AU) into every project.
 # Filter from user-facing plugin lists by default; expose --include-metronome
 # for users who want to see it.
@@ -1424,7 +1834,17 @@ def rollup_projects(paths: list[Path], lookup: dict[str, str]) -> dict:
     return aggregate_rollup(payloads)
 
 
-def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
+def _open_in_browser(path: Path) -> None:
+    """Open `path` in macOS default browser via `open` shell command."""
+    subprocess.run(["open", str(path)], check=False)
+
+
+def main(
+    path: str,
+    dump_bplists: bool = False,
+    as_json: bool = False,
+    as_html: bool = False,
+) -> None:
     alt = next(Path(path).glob("Alternatives/*"))
     raw = (alt / "ProjectData").read_bytes()
     info = parse_project(Path(path))
@@ -1434,6 +1854,18 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
 
     if as_json:
         print(project_to_json(info, lookup, raw=raw, all_aus=all_aus))
+        return
+
+    if as_html:
+        import tempfile
+        payload = json.loads(project_to_json(info, lookup, raw=raw, all_aus=all_aus))
+        html_doc = render_project_html(payload)
+        # Slug the project name for the tempfile so opens stack readably
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", info.name).strip("-") or "project"
+        out_file = Path(tempfile.gettempdir()) / f"lpx-toolkit-{slug}.html"
+        out_file.write_text(html_doc, encoding="utf-8")
+        print(f"Wrote {out_file}")
+        _open_in_browser(out_file)
         return
 
     fmt_dt = "%Y-%m-%d %H:%M"
@@ -1574,6 +2006,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Append a summary of NSKeyedArchive blobs (debug aid)",
     )
     parser.add_argument(
+        "--html",
+        action="store_true",
+        help="Generate a self-contained HTML dashboard and open it in the browser",
+    )
+    parser.add_argument(
         "path",
         nargs="?",
         help="Path to a .logicx project (omit when using --rollup)",
@@ -1606,7 +2043,7 @@ def cli(argv: list[str] | None = None) -> int:
     if args.rollup_paths:
         parser.error("multiple positional paths only allowed with --rollup")
 
-    main(args.path, dump_bplists=args.bplists, as_json=args.json)
+    main(args.path, dump_bplists=args.bplists, as_json=args.json, as_html=args.html)
     return 0
 
 

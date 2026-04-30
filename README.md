@@ -66,9 +66,12 @@ See `CLAUDE.md` for a detailed walk through the format and the specific quirks t
 python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx
 python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --bplists
 python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --json
+python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --html
 ```
 
 The `--json` flag emits a structured payload (project metadata, per-track strip + plugin chain, vendor rollup) for piping into other tools. Schema is versioned via the top-level `schema_version` field (currently `1`).
+
+The `--html` flag generates a self-contained HTML dashboard (project metadata, tracks table, FX chains, vendor rollup, phantom plugins, diagnostics) and opens it in the macOS default browser. Output lands in `$TMPDIR/lpx-toolkit-<slug>.html`.
 
 ### Cross-project rollup
 
