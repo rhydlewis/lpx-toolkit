@@ -20,20 +20,21 @@ Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github
 
 #### #41 Promotion on forums and Reddit `[user-actioned]`
 
-Get the tool in front of Logic Pro users and music producers. Not a coding task — needs the user's voice for the post copy.
+Tracked as [issue #5](https://github.com/rhydlewis/lpx-toolkit/issues/5). Refined 2026-04-30 after a `/refine` pass that pulled the actual conversation context from the two threads the user had pre-identified.
 
-**Where to post:**
-- r/LogicPro — primary audience. Mention "before you open a project on a new machine, see every plugin it needs". Lead with the rollup view image.
-- r/WeAreTheMusicMakers — secondary. Frame as "audit your plugin library, see which ones you actually use".
-- logicprohelp.com — Logic-specific forum, longer-form post likely OK.
-- Hacker News — `Show HN: lpx-toolkit — read-only Logic Pro project inspector`. Lead with the reverse-engineering angle (undocumented binary format, parsed offline) rather than the music-production angle.
-- Mastodon (#LogicPro / #musicproduction tags) and any DAW Discord communities the user frequents.
+**Sequence (warmest → coldest):**
 
-**Hook**: read-only by design (safe), runs offline (privacy), HTML dashboard, cross-project rollup answers "which of my installed plug-ins do I actually use?", source-available + free.
+1. Comment in [logicprohelp.com forum thread](https://www.logicprohelp.com/forums/topic/132829-internal-logic-pro-x-file-format-docs/) — mods + technical audience + prior art (`cigol` from `fastfourier`). EULA debate happened here; lpx-toolkit's read-only contract is the quiet shield.
+2. Comment in [r/Logic_Studio thread](https://www.reddit.com/r/Logic_Studio/comments/zqh2jv/scraping_data_from_logic_projectdata_file/) — tag `u/dougc84` (OP, original ask) and `u/renderfox` (asked for follow-ups).
+3. Fresh r/Logic_Studio post — `[Tool]` flair, lead with `rollup.png`.
+4. Show HN — Wed/Thu 10am Pacific. Lead with reverse-engineering, not the dashboard.
+5. Mastodon / Bluesky — short, image-led.
 
-**Distinctive vs other tools**: most "Logic project utilities" require Logic to be running. This doesn't — it parses the project file directly. That's the wedge.
+24-48h gap between (1+2) and (3+4+5).
 
-**Materials ready**: README (with two screenshots), CONTRIBUTING.md, four open reverse-engineering issues for community participation, public repo at https://github.com/rhydlewis/lpx-toolkit.
+**Draft copy** for all five channels was generated and shared in the conversation — copy from the chat history before posting and edit to taste. (Not committed to the repo as it's one-shot copy.)
+
+**Success criterion**: within 7 days, ≥1 external engagement signal (GH star uptick >10, external issue/PR, sustained comment thread on any channel).
 
 ### Deferred (now tracked as GitHub issues)
 
