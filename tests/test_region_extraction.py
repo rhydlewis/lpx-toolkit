@@ -483,6 +483,74 @@ def test_find_track_registry_records_keeps_audio_for_records_without_summing_tra
     assert ev.kind == "audio"
 
 
+# --- track_id: per-track uint16 LE at offset -62 from registry record ---
+
+
+def _registry_entry_with_preamble(
+    name: bytes,
+    sig: bytes = b"\x22\x12",
+    track_id: int = 0,
+    trailer: bytes = b"",
+) -> bytes:
+    """Synthesise a registry record preceded by the 64-byte 'track-link'
+    structure. Bytes 2-3 of that structure (i.e. -62/-61 from the start
+    of the registry record's preamble) carry the uint16-LE track ID."""
+    track_link = (
+        b"\x00\x11"                              # +0
+        + track_id.to_bytes(2, "little")         # +2 -- track ID
+        + b"\x19\x00\x40\x00\x12\x02\x04\x00"    # +4
+        + b"\x00" * 52                           # +12, pad to 64
+    )
+    assert len(track_link) == 64
+    record = (
+        b"\x00" * 4
+        + sig
+        + b"\x00" * 4
+        + b"\x80\x00"
+        + b"\x00" * 2
+        + len(name).to_bytes(2, "little")
+        + name
+        + trailer
+    )
+    return track_link + record
+
+
+def test_find_track_registry_records_extracts_track_id_from_preamble():
+    raw = b"\x00" * 64 + _registry_entry_with_preamble(b"Pad", track_id=2477)
+    [ev] = find_track_registry_records(raw)
+    assert ev.track_id == 2477
+
+
+def test_find_track_registry_records_track_id_zero_when_no_preamble_fits():
+    """If the registry record sits in the first 64 bytes of the file, there's
+    no preamble to read. Default to 0."""
+    raw = _registry_entry_with_preamble(b"Pad", track_id=99)[32:]
+    # Now the registry record starts at offset 0 — no room for preamble
+    [ev] = find_track_registry_records(raw)
+    assert ev.track_id == 0
+
+
+def test_find_track_registry_records_extracts_strip_id_for_audio_track():
+    """Audio-track records encode the channel-strip number in the post-name
+    bytes. For Andy & Red on Audio 1: trailer starts with `01 00 ...`."""
+    audio_trailer = b"\x01\x00\x00\x00\x00\x01\x00\x00"
+    raw = b"\x00" * 64 + _registry_entry_with_trailer(
+        b"Andy & Red", sig=b"\x23\x12", trailer=audio_trailer
+    )
+    [ev] = find_track_registry_records(raw)
+    assert ev.kind == "audio"
+    assert ev.strip_id == 1
+
+
+def test_find_track_registry_records_strip_id_zero_for_midi_tracks():
+    """MIDI tracks get a different post-name uint16 that isn't a channel-strip
+    number. Don't surface it in strip_id (would mislead callers)."""
+    raw = b"\x00" * 64 + _registry_entry(b"Pad", sig=b"\x22\x12")
+    [ev] = find_track_registry_records(raw)
+    assert ev.kind == "midi"
+    assert ev.strip_id == 0
+
+
 # --- TrackEvidence + kind propagation --------------------------------------
 
 
@@ -513,13 +581,16 @@ def test_find_track_header_records_tags_kind_as_midi():
     assert evidence.name == "Lead Strings"
 
 
-def test_evidence_is_unpackable_as_offset_name_kind_triple():
-    """TrackEvidence keeps tuple semantics so callers can unpack it."""
+def test_evidence_unpacks_with_extra_fields():
+    """TrackEvidence carries five fields now: offset, name, kind, track_id,
+    strip_id. Callers using star-unpacking still work."""
     raw = b"\x00" * 16 + _registry_entry(b"Pad", sig=b"\x22\x12")
     evidence = find_track_registry_records(raw)[0]
-    offset, name, kind = evidence
-    assert (name, kind) == ("Pad", "midi")
-    assert isinstance(offset, int)
+    assert evidence.name == "Pad"
+    assert evidence.kind == "midi"
+    assert isinstance(evidence.offset, int)
+    assert isinstance(evidence.track_id, int)
+    assert isinstance(evidence.strip_id, int)
 
 
 def test_tracks_from_regions_propagates_kind_into_cluster():

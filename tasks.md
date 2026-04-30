@@ -62,9 +62,13 @@ Logic's Track Stacks (summing stacks, folder stacks) group child tracks under a 
 
 ### Reverse-engineering follow-ups (deferred — need new evidence)
 
-#### #28 Strict region→strip bridge `[deferred]`
+#### #28 Strict region→strip bridge `[partially solved 2026-04-30]`
 
-The exact field linking `gRuA` region records to `OCuA` channel strips is still unidentified. Cluster-based track list shipping as a useful approximation. CLAUDE.md "Region records and user-renamed track names" lists the dead ends. Reopen if a new approach surfaces (e.g. parsing `ivnE` "Environment" records, or a bplist field referencing a region's UUID).
+**Audio strip mapping is solved.** Each registry record's post-name `uint16 LE` holds the channel-strip number for audio tracks. Wired up as `TrackEvidence.strip_id` / `RegionCluster.strip_id`. 100% accuracy on the 31 audio tracks in the busy-living test project (Andy & Red→1, Audio 3→3, Slide GTR→19, Audio 27→27, etc.).
+
+**Per-track ID also solved**: each registry record is preceded by a 64-byte preamble carrying a uint16 LE track ID at bytes 2-3. Now exposed as `TrackEvidence.track_id`.
+
+**Still open**: linking *region* records (`gRuA`) to their parent track. The strip number lives on the registry record, not the region — so for projects where the region count matters per channel strip we'd still need a region→registry bridge. The original deferred work for region UUID lookups remains.
 
 #### #31 Find hidden-track flag `[deferred]`
 
@@ -72,18 +76,22 @@ Ground-truth confirmed: control bytes in track-registry preamble are a track ind
 
 #### #34 Find the UI track-order list
 
-UI track-order list **NOT YET FOUND**. Investigation conducted:
+UI track-order list **STILL NOT FOUND** as of 2026-04-30 deeper investigation. Output now sorts by `track_id` (track-creation order) which is close-but-not-equal to UI order — the user's manual reordering is stored separately.
 
-- No 4-byte or 8-byte LE arrays of offsets pointing into the registry block (`6111929`–`6186949` in busy-living)
-- The 24 bplists clustered near the registry block are Smart Controls layouts (`MAPlugInParameterMapping` objects), not track-list ordering
-- Largest bplists overall are all parameter-mapping records, not track lists
+What's been ruled out:
 
-Next angles to try:
-- Parse NSKeyedArchive blobs looking for a `TracksAreaTrackList` or similar named object
-- Look for arrays of channel UUIDs (18 `_WsChannelUUID` already extracted)
-- Inspect `ivnE` Environment record (103 occurrences in the file)
+- 4-byte / 8-byte LE arrays of offsets pointing into the registry block (`6111929`–`6186949`)
+- 4-byte / 8-byte LE arrays of `track_id` values in any direct encoding (uint16 LE or uint32 LE) — search for the UI prefix `[5203, 9, 1677, 73, 5331, 2477, 2155]` returned 0 hits
+- All 225 NSKeyedArchive blobs in `ProjectData` — none has a top-level array of size 50-80 except `scalingGraph` (automation) and one of size 64 (parameter mappings)
+- `DisplayStateArchive` plist — only window/screenset state, no track-list ordering
+- The cluster of 24 bplists near the registry block — they're per-region Metro/LoopFamily records, not per-track ordering
 
-Once found, the track output can match Logic's row numbers exactly.
+Next angles for whoever picks this up:
+
+1. Enumerate every NSKeyedArchive `$classname` across all 225 blobs — look for `TracksAreaTrackList`, `TrackListOrdering`, or similar named class. Currently we filter by class on extraction; a complete inventory might surface a track-list class we missed.
+2. The 18 `_WsChannelUUID` records already extracted are tied to Smart Controls — but their UUIDs might appear in some other ordered list.
+3. Inspect the `ivnE` ("Environment") records (103 occurrences). They might carry track-routing topology including display order.
+4. Test whether the project file at offsets *between* `OCuA` (~1.4 M) and the track registry (~6.1 M) contains a track-list-like structure. That's a 4.7 M byte range we haven't systematically searched.
 
 ---
 
@@ -112,6 +120,14 @@ Added `find_track_header_records()` to pick up MIDI/instrument track names that 
 #### #33 Stop deduping by name — use registry records as authoritative track count ✓
 
 `tracks_from_evidence()` replaces name-collapsing `tracks_from_regions()` in the main pipeline. One entry per registry record; gRuA region counts attach to the first matching name. Output now matches Logic's actual track count exactly (69 in busy-living test project).
+
+#### #28 Strict region→strip bridge ✓ (audio strip mapping)
+
+Audio-track registry records encode the channel-strip number in the post-name `uint16 LE`. Wired up via `_decode_audio_strip_id()` and surfaced as `TrackEvidence.strip_id` / `RegionCluster.strip_id`. 100% accuracy on the 31 audio tracks in the busy-living test project. Still open: region→strip bridge (different problem — the strip number lives on the registry record, not the region).
+
+#### #28b Per-track ID extraction ✓ (new finding 2026-04-30)
+
+Each registry record has a 64-byte preamble whose bytes 2-3 are a uint16 LE per-track ID. Exposed as `TrackEvidence.track_id` / `RegionCluster.track_id`. Stable, globally unique within a project. Track-list output now sorts by this ID for stable ordering close to UI order (but not exactly).
 
 #### #35 Distinguish Folder Stack / Summing Stack / Aux Stack ✓
 

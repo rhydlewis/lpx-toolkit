@@ -29,7 +29,11 @@ The fingerprint key format is `f"{type}/{subtype}/{manufacturer}"` — preserve 
 
 User-given track header names (e.g. `Acoustic GTR`, `Ld GTR Low`) live inside Audio Region records in the binary section, not inside `OCuA` channel-strip records. The `gRuA` 4CC (`AuRg` reversed) marks the start of each region; the name is at offset +112, length-prefixed by a uint16 LE at +110.
 
-**The strict strip mapping is unsolved.** Regions and `OCuA` records sit in non-overlapping byte ranges, and the candidate fields inside `gRuA` records are not consistent within a track's regions. Tried so far (don't redo without new evidence):
+**Audio strip mapping**: SOLVED (2026-04-30). The post-name `uint16 LE` of an audio-signature track-registry record holds the channel-strip number directly. Padding is alignment-dependent: try byte offset 0 first (works for even-name-length records), then offset 1 (odd-name-length). Wired up via `_decode_audio_strip_id()` and surfaced as `TrackEvidence.strip_id` / `RegionCluster.strip_id`. MIDI tracks use the same 2-byte slot for an unrelated track-instance ID, so we only populate `strip_id` when `kind == 'audio'`.
+
+**Per-track ID**: SOLVED (2026-04-30). Each registry record is preceded by a 64-byte 'track-link' structure whose bytes 2-3 are a uint16 LE track ID. IDs are stable per track and globally unique within a project (audio tracks get small IDs ~9-2000, MIDI ~2000-3500, folders ~3300-4300, summing stacks 5000+). Surfaced as `TrackEvidence.track_id`.
+
+**Region→strip mapping inside gRuA records is still unsolved.** The strip number above lives in the registry record, not the region record. Tried so far for region records (don't redo without new evidence):
 
 - Region offsets vs OCuA byte ranges — zero overlap
 - 4 bytes immediately preceding the `\x61\xff` marker — varies per region within the same track

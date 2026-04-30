@@ -187,12 +187,16 @@ class RegionCluster:
     user-perceived track. `base_name` is the cleaned form; `count` is how
     many records contributed; `first/last_offset` bracket the byte range;
     `kind` is the inferred track type ('audio'/'midi'/'folder'/'unknown')
-    derived from the strongest evidence available."""
+    derived from the strongest evidence available; `track_id` is Logic's
+    per-track uint16 (0 if unknown); `strip_id` is the channel-strip
+    number for audio tracks (0 elsewhere)."""
     base_name: str
     count: int
     first_offset: int
     last_offset: int
     kind: str = "unknown"
+    track_id: int = 0
+    strip_id: int = 0
 
 
 def _unpack_record(record) -> tuple[int, str, str]:
@@ -265,7 +269,17 @@ def tracks_from_evidence(
 
     # One entry per registry record — preserves duplicate names (= different tracks).
     for record in registry_records:
-        offset, raw_name, kind = _unpack_record(record)
+        # Registry records carry track_id/strip_id; legacy 2/3-tuple records don't.
+        if isinstance(record, TrackEvidence):
+            offset = record.offset
+            raw_name = record.name
+            kind = record.kind
+            track_id = record.track_id
+            strip_id = record.strip_id
+        else:
+            offset, raw_name, kind = _unpack_record(record)
+            track_id = 0
+            strip_id = 0
         cleaned = _strip_region_suffixes(raw_name)
         if not _is_user_track_name(cleaned):
             continue
@@ -286,6 +300,8 @@ def tracks_from_evidence(
             first_offset=first_off,
             last_offset=offset,
             kind=kind,
+            track_id=track_id,
+            strip_id=strip_id,
         ))
 
     # Region-only entries — names with gRuA evidence but no registry record
@@ -424,10 +440,23 @@ TRACK_HEADER_NOISE = frozenset({
 class TrackEvidence(NamedTuple):
     """Single evidence record for a track: where in the file we saw it,
     what name it carried, and which extractor (with what kind hint) found
-    it. Kind is one of 'audio', 'midi', 'folder', 'unknown'."""
+    it. Kind is one of 'audio', 'midi', 'folder', 'unknown'.
+
+    `track_id` is a per-track uint16 LE Logic stores immediately before
+    each registry record (32-byte preamble, bytes 2-3). Stable across the
+    project and unique per track — useful as a key for cross-referencing
+    from other records. 0 when the source doesn't carry one (e.g. region
+    or header records).
+
+    `strip_id` is the channel-strip number for audio tracks (uint16 LE
+    that follows the name). Only meaningful when `kind == 'audio'`; 0
+    elsewhere.
+    """
     offset: int
     name: str
     kind: str
+    track_id: int = 0
+    strip_id: int = 0
 
 
 # Track-registry signatures observed empirically. Each Logic track entry has
@@ -493,6 +522,24 @@ def _is_summing_stack_trailer(trailer: bytes) -> bool:
     return False
 
 
+def _decode_audio_strip_id(post_name: bytes) -> int:
+    """First non-zero uint16-LE in the bytes after the name.
+
+    Audio-track registry records encode their channel-strip number here.
+    Padding can be 0 or 1 bytes depending on the name length (records
+    appear to be 2-byte-aligned), so we accept either offset.
+    """
+    if len(post_name) >= 2:
+        v = post_name[0] | (post_name[1] << 8)
+        if 0 < v < 512:
+            return v
+    if len(post_name) >= 3:
+        v = post_name[1] | (post_name[2] << 8)
+        if 0 < v < 512:
+            return v
+    return 0
+
+
 def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
     """Extract TrackEvidence records from track-registry entries.
 
@@ -504,6 +551,9 @@ def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
     Folder-signature records are further refined: a Summing Stack
     (`Sub N` strip) shows a distinct trailer pattern after the name, so we
     upgrade kind from generic `folder` to `summing-stack` when matched.
+
+    Each record is preceded by a 32-byte 'track-link' structure carrying a
+    uint16-LE per-track ID at bytes 2-3. We capture that as `track_id`.
     """
     out: list[TrackEvidence] = []
     for m in TRACK_REGISTRY_RE.finditer(raw):
@@ -523,13 +573,26 @@ def find_track_registry_records(raw: bytes) -> list[TrackEvidence]:
         name = nb.decode("ascii")
         if name in TRACK_REGISTRY_NOISE:
             continue
-        # Some signatures (23 12, dc 11) are shared between regular audio
-        # tracks AND audio Summing Stacks (Backline, Guitars). Check the
-        # trailer pattern regardless of the signature-derived kind.
+        # Trailer-pattern check upgrades 'folder' or 'audio' kind to
+        # 'summing-stack' when the post-name bytes match.
         trailer = raw[name_off + length_lo:name_off + length_lo + 8]
         if _is_summing_stack_trailer(trailer):
             kind = "summing-stack"
-        out.append(TrackEvidence(offset=m.start(), name=name, kind=kind))
+        # track_id lives in the preceding 32-byte 'track-link' structure.
+        track_id = 0
+        if m.start() >= 62:
+            track_id = raw[m.start() - 62] | (raw[m.start() - 61] << 8)
+        # strip_id only meaningful for audio tracks
+        strip_id = 0
+        if kind == "audio":
+            strip_id = _decode_audio_strip_id(trailer)
+        out.append(TrackEvidence(
+            offset=m.start(),
+            name=name,
+            kind=kind,
+            track_id=track_id,
+            strip_id=strip_id,
+        ))
     return out
 
 
@@ -979,17 +1042,25 @@ def main(path: str, dump_bplists: bool = False) -> None:
 
     tracks = tracks_from_evidence(registry_records, header_records, region_records)
     if tracks:
-        tracks.sort(key=lambda t: t.first_offset)
+        # Sort by track_id (Logic's per-track creation order) — matches UI
+        # ordering for the simple case of "added tracks in order, no manual
+        # rearrangement". When the user reorders rows, the file stores a
+        # separate ordering list we haven't located yet (#34).
+        tracks.sort(key=lambda t: (t.track_id, t.first_offset))
         print(
             f"\n=== TRACK LIST ({len(tracks)} tracks) ==="
-            "\n(one entry per registry record — duplicate names = different tracks)"
+            "\n(track-id order; duplicate names = different tracks; UI"
+            "\nrow ordering is a permutation of this stored elsewhere)"
         )
         for i, t in enumerate(tracks, 1):
-            auto = bool(_AUTO_TRACK_NAME_RE.match(t.base_name))
-            strip = t.base_name if auto else "—"
+            strip_label = f"strip {t.strip_id}" if t.strip_id else "—"
+            id_label = f"id {t.track_id}" if t.track_id else "—"
             print(
-                f"  {i:>2}. {t.base_name:30s}  type: {t.kind:7s}  "
-                f"strip: {strip:10s}  ({t.count} regions)"
+                f"  {i:>2}. {t.base_name:30s}  "
+                f"type: {t.kind:13s}  "
+                f"{id_label:7s}  "
+                f"{strip_label:9s}  "
+                f"({t.count} regions)"
             )
 
     if dump_bplists:
