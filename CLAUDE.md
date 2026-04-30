@@ -33,6 +33,35 @@ User-given track header names (e.g. `Acoustic GTR`, `Ld GTR Low`) live inside Au
 
 **Per-track ID**: SOLVED (2026-04-30). Each registry record is preceded by a 64-byte 'track-link' structure whose bytes 2-3 are a uint16 LE track ID. IDs are stable per track and globally unique within a project (audio tracks get small IDs ~9-2000, MIDI ~2000-3500, folders ~3300-4300, summing stacks 5000+). Surfaced as `TrackEvidence.track_id`.
 
+**Per-track focus byte**: Byte 0 of the 64-byte preamble (offset -64 from registry record start). Set to `0x01` for the *currently focused* track (the one Logic restores as selected on project load), `0x00` for all others. Verified by diffing two projects where the user swapped Piano↔E Piano in row order: only Piano's preamble[0] flipped 0→1 and Red Dialogue's flipped 1→0 (Red Dialogue had been the focus before the swap was made). Not a row-order field — purely "which track is selected".
+
+**UI track-row order**: STRUCTURE FOUND, encoding partially reverse-engineered (2026-04-30 minimal-test diff session).
+
+A clean two-track diff (`LPX Test Original.logicx` with Bass=row1, Synth=row2 vs `LPX Test Edited.logicx` with the rows swapped) localised the ordering data to **per-track "track-info" records** at fixed offsets near the start of `ProjectData`. Each record:
+
+- Magic header: `\x04\x02\x07\x01` at the record's start
+- Followed by `\x00\x00\x00\x08\x80\x4f\x12\x00\x00\x00\x00\x00\x04\x00\x00\x00` (constant)
+- A series of uint16 LE fields starting at +20
+
+Field at **+24 (uint16 LE) = 1-based UI row position**. Verified:
+
+| File | Block 1 (Bass) | Block 2 (Synth) |
+|---|---|---|
+| Original (Bass=1, Synth=2) | +24 = 1 | +24 = 0 (default) |
+| Edited (Synth=1, Bass=2) | +24 = 2 | +24 = 1 |
+
+Value `0` appears to mean "default ordering" (the track inherits its position from track-creation order); a non-zero value is an explicit row index. After any manual reorder, both tracks involved get explicit values.
+
+**Caveat**: the magic `\x04\x02\x07\x01` only appears in the minimal test files (Logic 11.x freshly-created project with 2 tracks). It does NOT appear in the busy-living project (Logic 12.2, 69 tracks). The encoding is either Logic-version-dependent OR these blocks are part of a Logic 11 template that gets stripped/rewritten in larger projects. Possibilities to investigate:
+
+- Different magic in Logic 12 — search for similar 16-byte structures with `04 00 00 00 01 00 01 00 ...` payloads
+- The blocks may live elsewhere in larger projects (e.g. inside an `ivnE` Environment record)
+- Logic might use a more compact encoding once the project exceeds N tracks
+
+For #34 to be production-ready: produce a *Logic 12* minimal-test pair (one before, one after a row swap) and re-do the diff. The Logic 11 finding here is a useful waypoint but probably not the final encoding.
+
+Still to verify on a real project: (1) extracting the row positions and reconstructing the UI order; (2) what fields at +20, +32 mean (also changed in the diff); (3) which track each block belongs to (the test project had blocks at fixed offsets in both files so block 1 = Bass and block 2 = Synth was inferable from which fields changed).
+
 **Region→strip mapping inside gRuA records is still unsolved.** The strip number above lives in the registry record, not the region record. Tried so far for region records (don't redo without new evidence):
 
 - Region offsets vs OCuA byte ranges — zero overlap

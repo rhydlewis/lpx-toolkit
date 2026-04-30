@@ -76,22 +76,47 @@ Ground-truth confirmed: control bytes in track-registry preamble are a track ind
 
 #### #34 Find the UI track-order list
 
-UI track-order list **STILL NOT FOUND** as of 2026-04-30 deeper investigation. Output now sorts by `track_id` (track-creation order) which is close-but-not-equal to UI order — the user's manual reordering is stored separately.
+UI track-order list **STILL NOT FOUND** as of 2026-04-30 deeper investigation. Diff approach (Angle 5) attempted but blocked by plugin-state noise. Output now sorts by `track_id` (track-creation order) which is close-but-not-equal to UI order.
+
+**Findings from the 2026-04-30 row-swap diff session:**
+
+User produced a paired project: one before, one after swapping Piano (was row 12) ↔ E Piano (was row 13). Diff results:
+
+- File grew by **48 bytes** total (consistent across all later registry records — they all shift by +48)
+- 5,047,737 differing byte positions out of 7.13 M — i.e. 70% of the file
+- Most diffs were **plugin-state re-serialisation noise** (Soundtoys EffectRack base64 strings of slightly different lengths, NSKeyedArchiver UID renumbering inside Smart Controls bplists)
+- The single byte change in the registry preamble (Piano's preamble[0] flipped 0→1, Red Dialogue's flipped 1→0) turned out to be the **per-track focus byte**, not the order field — Red Dialogue had been the previously focused track
+- Searches for adjacent Piano(2091)+E_Piano(2605) `track_id` pairs in any uint16 / uint32 LE encoding within 32 bytes returned **0 matches in either file**
+- Decoded the 4 bplists whose content actually changed (vs just shifting): all were Smart Controls layouts, no track ordering
 
 What's been ruled out:
 
-- 4-byte / 8-byte LE arrays of offsets pointing into the registry block (`6111929`–`6186949`)
-- 4-byte / 8-byte LE arrays of `track_id` values in any direct encoding (uint16 LE or uint32 LE) — search for the UI prefix `[5203, 9, 1677, 73, 5331, 2477, 2155]` returned 0 hits
-- All 225 NSKeyedArchive blobs in `ProjectData` — none has a top-level array of size 50-80 except `scalingGraph` (automation) and one of size 64 (parameter mappings)
-- `DisplayStateArchive` plist — only window/screenset state, no track-list ordering
-- The cluster of 24 bplists near the registry block — they're per-region Metro/LoopFamily records, not per-track ordering
+- 4-byte / 8-byte LE arrays of offsets pointing into the registry block
+- Flat arrays of `track_id` values in any direct uint16 or uint32 LE encoding
+- All 225 NSKeyedArchive blobs in `ProjectData`
+- `DisplayStateArchive` plist (only window/screenset state)
+- Per-track focus byte (preamble[0]) — selected-track flag, not row order
+- The cluster of 24 bplists near the registry block (per-region Metro/LoopFamily records)
 
-Next angles for whoever picks this up:
+**MINIMAL-TEST DIFF FINDINGS (2026-04-30):**
 
-1. Enumerate every NSKeyedArchive `$classname` across all 225 blobs — look for `TracksAreaTrackList`, `TrackListOrdering`, or similar named class. Currently we filter by class on extraction; a complete inventory might surface a track-list class we missed.
-2. The 18 `_WsChannelUUID` records already extracted are tied to Smart Controls — but their UUIDs might appear in some other ordered list.
-3. Inspect the `ivnE` ("Environment") records (103 occurrences). They might carry track-routing topology including display order.
-4. Test whether the project file at offsets *between* `OCuA` (~1.4 M) and the track registry (~6.1 M) contains a track-list-like structure. That's a 4.7 M byte range we haven't systematically searched.
+User produced a clean 2-track minimal pair (`LPX Test Original.logicx` Bass=row1/Synth=row2 vs `LPX Test Edited.logicx` Synth=row1/Bass=row2). Localised the ordering data to **per-track "track-info" records**:
+
+- Magic header: `\x04\x02\x07\x01\x00\x00\x00\x08\x80\x4f\x12\x00`
+- Field at **+24 (uint16 LE) = 1-based UI row position** (verified)
+- Value `0` means "default ordering" (use track-creation order); non-zero means explicit row index
+- Smart Controls bplists added when the user clicked tracks during reorder were red herrings — they're auto-generated UI metadata, not ordering
+
+**BUT**: the magic doesn't appear in the busy-living project (Logic 12.2, 69 tracks) — only in the minimal test files (likely Logic 11.x). The encoding is Logic-version-dependent or compacted in larger projects. CLAUDE.md "Region records and user-renamed track names" section has the full breakdown.
+
+**Recommended next step**: produce a Logic 12 minimal pair (2-track project, save with no changes → save with row swap) and re-diff. The Logic 11 finding gives us a clear template to look for; we just need the Logic 12 version of the same structure.
+
+Other angles still untried (from earlier sessions):
+
+1. Enumerate every NSKeyedArchive `$classname` across all 225 blobs — look for `TracksAreaTrackList`, `TrackListOrdering`, or similar named class
+2. The 18 `_WsChannelUUID` records already extracted are tied to Smart Controls — their UUIDs might appear in some other ordered list
+3. Inspect the `ivnE` ("Environment") records (103 occurrences) — possible track-routing topology including display order
+4. Systematically scan the 4.7 M byte range between OCuA (~1.4 M) and the registry (~6.1 M)
 
 ---
 
