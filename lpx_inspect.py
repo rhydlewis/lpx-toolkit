@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 # Footer links — used by both the per-project dashboard and the library index.
 _REPO_URL = "https://github.com/rhydlewis/lpx-toolkit"
@@ -2400,7 +2400,12 @@ def main(
     as_json: bool = False,
     as_html: bool = False,
 ) -> None:
-    alt = next(Path(path).glob("Alternatives/*"))
+    bundle = Path(path)
+    alt = next(iter(bundle.glob("Alternatives/*")), None)
+    if alt is None:
+        raise FileNotFoundError(
+            f"{bundle}: not a valid .logicx bundle (no Alternatives/ directory)"
+        )
     raw = (alt / "ProjectData").read_bytes()
     info = parse_project(Path(path))
     lookup = auval_lookup_cached()
@@ -3317,6 +3322,27 @@ def cli(argv: list[str] | None = None) -> int:
 
     if args.rollup_paths:
         parser.error("multiple positional paths only allowed with --rollup")
+
+    # Validate the inspect path up front and surface a friendly message
+    # rather than letting parse_project blow up deep inside main().
+    target = Path(args.path).expanduser()
+    if not target.exists():
+        parser.error(f"path not found: {target}")
+    if target.is_dir() and target.suffix != ".logicx":
+        # Plain directory — if it contains .logicx bundles, suggest --rollup.
+        children = _list_projects(target)
+        if children:
+            parser.error(
+                f"{target} is a directory containing "
+                f"{len(children)} .logicx bundle{'s' if len(children) != 1 else ''}; "
+                f"did you mean `lpx-toolkit --rollup {args.path}`?"
+            )
+        parser.error(
+            f"{target} is not a .logicx project bundle "
+            "(and contains none — pass a .logicx path)"
+        )
+    if not target.is_dir() or target.suffix != ".logicx":
+        parser.error(f"{target} is not a .logicx project bundle")
 
     main(args.path, dump_bplists=args.bplists, as_json=args.json, as_html=args.html)
     return 0

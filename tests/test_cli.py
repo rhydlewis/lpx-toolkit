@@ -111,3 +111,42 @@ def test_cli_rollup_mode_requires_at_least_one_path(capsys):
     with pytest.raises(SystemExit) as exc:
         cli(["--rollup"])
     assert exc.value.code != 0
+
+
+def test_cli_directory_with_logicx_children_suggests_rollup(tmp_path, capsys):
+    """If the user points the inspect mode at a directory that *contains*
+    .logicx bundles, suggest `--rollup` instead of crashing with a glob
+    StopIteration."""
+    import plistlib
+    bundle = tmp_path / "demo.logicx"
+    alt = bundle / "Alternatives" / "000"
+    alt.mkdir(parents=True)
+    (alt / "MetaData.plist").write_bytes(plistlib.dumps({"BeatsPerMinute": 120.0}))
+    (alt / "ProjectData").write_bytes(b"")
+    with pytest.raises(SystemExit) as exc:
+        cli([str(tmp_path)])
+    assert exc.value.code != 0
+    captured = capsys.readouterr()
+    msg = captured.err.lower() + captured.out.lower()
+    assert "--rollup" in msg
+
+
+def test_cli_non_logicx_directory_explains_problem(tmp_path, capsys):
+    """If the user points inspect mode at a plain directory (no .logicx
+    children), say so cleanly — no traceback."""
+    with pytest.raises(SystemExit) as exc:
+        cli([str(tmp_path)])
+    assert exc.value.code != 0
+    captured = capsys.readouterr()
+    msg = captured.err.lower() + captured.out.lower()
+    assert ".logicx" in msg or "not a" in msg
+
+
+def test_cli_missing_path_explains_problem(tmp_path, capsys):
+    """A non-existent path should error cleanly, not crash."""
+    with pytest.raises(SystemExit) as exc:
+        cli([str(tmp_path / "does-not-exist.logicx")])
+    assert exc.value.code != 0
+    captured = capsys.readouterr()
+    msg = captured.err.lower() + captured.out.lower()
+    assert "not found" in msg or "no such" in msg or "does not exist" in msg
