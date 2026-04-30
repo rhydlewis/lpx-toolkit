@@ -24,7 +24,20 @@ Package as installable CLI: `pyproject.toml` `[project.scripts]` entry point, Py
 
 ### Feature additions
 
-#### #27 Detect summing/folder tracks (track groups)
+#### #27 Detect summing/folder tracks (track groups) `[deferred 2026-04-30]`
+
+**Already shipped via #35**: `kind: "summing-stack"` and `kind: "folder"` classification on the parent track. Text/JSON/HTML all surface this distinctly.
+
+**Still missing**: per-child parent reference — which audio/MIDI tracks belong to which `Sub N`.
+
+Investigation summary:
+- Registry-record trailer byte at offset +4 (uint16 LE) varies per child (`0x02`, `0x07`, `0x0f`, etc.) but does NOT correlate with UI parent. All Sub 9 Guitars children should share a value but have different ones — likely a routing-history or audio-output-bus field, not a parent link.
+- The 64-byte registry preamble is identical across siblings — no parent pointer there.
+- Children aren't grouped contiguously in the registry by track_id (audio children are scattered through ids 9–1900; summing-stacks are 5000+).
+
+**To resolve**: 2-3 sessions of OCuA channel-strip reverse-engineering. Each child track's output routes to the parent Sub's strip; that field is in the OCuA descriptor (24KB+ records, only a handful of fields decoded so far). The user-facing JTBD doesn't currently demand it, so deferred.
+
+
 
 Logic's Track Stacks (summing stacks, folder stacks) group child tracks under a parent. Extract the parent→child relationships and surface them in the tracks output (indent or grouped row). Format reverse-engineering needed.
 
