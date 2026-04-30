@@ -51,11 +51,12 @@ The full coding conventions, code style, and out-of-scope list are in `CLAUDE.md
 
 ## Where help is wanted
 
-Several pieces of the `.logicx` format are still partially understood. Each of these has had multiple investigation rounds — see `CLAUDE.md` for what's already been tried so you don't duplicate dead ends:
+Several pieces of the `.logicx` format are still partially understood. Each has had multiple investigation rounds — see `CLAUDE.md` and the linked issues for what's already been tried so you don't duplicate dead ends:
 
-- **UI track-row order.** We can extract every track and its stable per-project ID, but the user-visible row order is encoded somewhere we haven't pinned down. Cluster-based ordering ships as the working approximation.
-- **Hidden-track flag.** Hidden tracks come back from the registry like any other; the flag distinguishing them is somewhere outside the registry record itself.
-- **Region → channel-strip mapping.** Audio regions carry a track name but no direct strip number. We approximate by clustering and name-matching against default strip names.
+- [#1 — Detect Track Stack parent→child relationships](https://github.com/rhydlewis/lpx-toolkit/issues/1) — group children under their parent Sub
+- [#2 — Find region → channel-strip bridge field](https://github.com/rhydlewis/lpx-toolkit/issues/2) — authoritative region-to-strip mapping
+- [#3 — Find the hidden-track flag](https://github.com/rhydlewis/lpx-toolkit/issues/3) — distinguish hidden from visible tracks
+- [#4 — Find the UI track-row order field](https://github.com/rhydlewis/lpx-toolkit/issues/4) — render tracks in Logic's actual UI order
 
 Ground-truth-driven diffs (a tiny project saved twice with one specific change) are the most productive way to attack any of these.
 
