@@ -114,6 +114,8 @@ JSON endpoints are exposed for tooling: `/api/projects`, `/api/projects/<index>`
 
 `--rollup` aggregates plugin usage across many projects and opens the result in your browser. The view shows the most-used plug-ins, top manufacturers, and a clickable list of projects you can drill into.
 
+![lpx-toolkit rollup view](rollup.png)
+
 ```sh
 lpxtool --rollup ~/Music/Logic/*.logicx
 ```
