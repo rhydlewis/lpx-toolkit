@@ -22,7 +22,12 @@ Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github
 
 Package as installable CLI for distribution.
 
-**PyPI — done 2026-04-30.** `lpx-toolkit 0.1.0` is live at https://pypi.org/project/lpx-toolkit/0.1.0/. README's headline install is now `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Smoke-tested end-to-end: TestPyPI → fresh-venv install → real-project parse, then real PyPI → `uvx --refresh --from lpx-toolkit lpxtool --version` → `lpx-inspect 0.1.0`. Release workflow documented in CONTRIBUTING.md.
+**PyPI — done 2026-04-30.** `lpx-toolkit` is live at https://pypi.org/project/lpx-toolkit/. Release workflow documented in CONTRIBUTING.md.
+
+- `0.1.0` debut: published end-to-end via TestPyPI smoke + real PyPI.
+- `0.1.1` fix: shipped same day after a user reported `uvx lpx-toolkit` failed because the package only declared the `lpxtool` console script. Added `lpx-toolkit = "lpx_inspect:cli"` as a second entry point so the package name and the executable match. Both names work; `lpxtool` stays as the shorter alias.
+
+README's headline install: `uvx lpx-toolkit ~/Music/Logic/foo.logicx`.
 
 **Homebrew tap — pending.** Create a `homebrew-rhydlewis` (or similar) repo on GitHub with a `lpxtool.rb` formula that wraps `pip install lpx-toolkit==0.1.0`. Then `brew install rhydlewis/rhydlewis/lpxtool` becomes a third install path for Mac users who prefer Homebrew.
 
