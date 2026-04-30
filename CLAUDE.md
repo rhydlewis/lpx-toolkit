@@ -79,6 +79,14 @@ Next investigation needs to:
 2. Map the sequential index back to the track each entry refers to (the UUIDs probably keyed into another table that gives us the track)
 3. Test on the busy-living project (69 tracks → 69 of these records, presumably)
 
+**Update (2026-04-30 follow-up with a 3-track minimal test)**: the 0x19 records are NOT track ordering. A clean 3-track Logic 12 test (drag Audio 3 to row 2) showed:
+- **+514 type-0x19 placeholder records** in EDIT (one slot per 4-byte counter step). 514 slots for 3 tracks rules this out as an ordering structure — it's a free-list / pre-allocation expansion.
+- **Registry record preambles are byte-identical** between ORIG and EDIT — including byte 0 (focus flag). The reorder doesn't touch the registry.
+- **+12 type-0x17 records** appear in the score-editor (`karT`) region after `qSvE` markers, with sequential counters. Looks more like score-editor event-sequence allocation than a track-list-order.
+- **0 occurrences** of any flat ordered array of `track_id` values in any uint16/uint32 encoding (LE or BE).
+
+**The track-row-order encoding is unidentified.** Cluster-based `track_id` ordering ships as the working approximation. Reopen #34 only if a fundamentally new angle surfaces.
+
 **Region→strip mapping inside gRuA records is still unsolved.** The strip number above lives in the registry record, not the region record. Tried so far for region records (don't redo without new evidence):
 
 - Region offsets vs OCuA byte ranges — zero overlap

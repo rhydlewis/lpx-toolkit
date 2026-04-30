@@ -102,7 +102,16 @@ First uint32 fixed at `0x19` (type tag), second uint32 increments by 4. **This i
 3. Verify on busy-living: 69 tracks → expect 69 of these records in some order
 4. Test that this reconstructs the UI row order accurately
 
-**0x19 hypothesis ALSO ruled out (2026-04-30 follow-up):** busy-living has only 1 run of 24-byte-stride `0x19` records (257 entries). Only 1 entry has a non-zero UUID; all others are zeroed. That's not a 69-track ordering — it's a sparse pre-allocated table with mostly empty slots. The 0x19 records in the test EDIT file may have been misleading. **#34 is officially deferred** until a different angle surfaces. Cluster-based ordering (track-id sort) ships as the working approximation.
+**0x19 hypothesis ALSO ruled out (2026-04-30 follow-up):** busy-living has only 1 run of 24-byte-stride `0x19` records (257 entries). Only 1 entry has a non-zero UUID; all others are zeroed. That's not a 69-track ordering — it's a sparse pre-allocated table with mostly empty slots. The 0x19 records in the test EDIT file may have been misleading.
+
+**3-track minimal test (2026-04-30 follow-up #2):** User dragged Audio 3 from row 3 to row 2 in a clean Logic 12 minimal project. Findings:
+- Registry preambles are byte-identical between ORIG and EDIT (focus byte too)
+- +514 type-0x19 placeholder records (free-list expansion, not ordering — 514 slots for 3 tracks)
+- +12 type-0x17 records in the score-editor (karT) region (event-sequence allocation)
+- +2 Smart Controls bplists (Logic auto-creates on track click)
+- 0 matches for any flat ordered array of track_ids (uint16/uint32, LE/BE)
+
+**#34 is officially deferred** until a fundamentally new angle surfaces. Cluster-based ordering (track-id sort) ships as the working approximation.
 
 Other angles still untried (from earlier sessions):
 
