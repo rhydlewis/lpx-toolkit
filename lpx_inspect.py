@@ -112,6 +112,42 @@ class ProjectInfo:
     tracks: list[Track]
     created_at: datetime
     modified_at: datetime
+    sample_rate: int = 0
+    bundle_size_bytes: int = 0
+    audio_file_count: int = 0
+    impulse_response_count: int = 0
+    frame_rate_index: int = 0
+
+
+# FrameRateIndex from MetaData.plist → SMPTE rate. Values observed
+# empirically + cross-referenced with Apple Logic Pro project docs.
+_FRAME_RATES_BY_INDEX = {
+    0: 24.0,
+    1: 25.0,
+    2: 29.97,    # 29.97 drop-frame
+    3: 30.0,     # 30 drop-frame
+    4: 29.97,
+    5: 30.0,
+    6: 23.976,
+    7: 23.976,
+}
+
+
+def frame_rate_for_index(idx: int) -> float | None:
+    """Decode FrameRateIndex → SMPTE rate. Returns None for unknown indexes."""
+    return _FRAME_RATES_BY_INDEX.get(idx)
+
+
+def _bundle_total_size(bundle: Path) -> int:
+    """Recursive sum of all file sizes inside a .logicx bundle."""
+    total = 0
+    for child in bundle.rglob("*"):
+        if child.is_file():
+            try:
+                total += child.stat().st_size
+            except OSError:
+                pass
+    return total
 
 
 def reverse_4cc(b: bytes) -> str:
@@ -878,6 +914,11 @@ def parse_project(logicx_path: Path) -> ProjectInfo:
         tracks=tracks,
         created_at=created_at,
         modified_at=modified_at,
+        sample_rate=md.get("SampleRate", 0),
+        bundle_size_bytes=_bundle_total_size(logicx_path),
+        audio_file_count=len(md.get("AudioFiles", [])),
+        impulse_response_count=len(md.get("ImpulsResponsesFiles", [])),
+        frame_rate_index=md.get("FrameRateIndex", 0),
     )
 
 
@@ -1074,6 +1115,132 @@ def summarise_bplists(blobs: list[BPlistBlob]) -> None:
 JSON_SCHEMA_VERSION = 1
 
 
+# Logic loads Klopfgeist (its built-in metronome AU) into every project.
+# Filter from user-facing plugin lists by default; expose --include-metronome
+# for users who want to see it.
+KLOPFGEIST_FINGERPRINT = "aumu/klop/appl"
+
+
+def is_metronome_au(au: AURef) -> bool:
+    """True if the AU is Logic's built-in metronome."""
+    return au.fingerprint == KLOPFGEIST_FINGERPRINT
+
+
+# Length threshold for the "truncated name" diagnostic. Logic clips to
+# ~11 chars; we treat 11-char names with a longer auval-resolved form as
+# truncations.
+_TRUNCATION_LENGTH = 11
+
+
+def _track_aus(track: Track) -> list[tuple[str, AURef]]:
+    """Return [(label, AURef), …] for every plugin on the track in slot order."""
+    out: list[tuple[str, AURef]] = []
+    if track.instrument:
+        out.append(("instrument", track.instrument))
+    out.extend(("midi_fx", fx) for fx in track.midi_fx)
+    out.extend(("audio_fx", fx) for fx in track.audio_fx)
+    return out
+
+
+def diagnose_project(tracks: list[Track], lookup: dict[str, str]) -> list[dict]:
+    """Return a list of warning dicts for the project.
+
+    Each warning has a `kind` field. Currently emitted kinds:
+      - unresolved_plugin: plugin fingerprint not in auval (missing on this
+        system)
+      - duplicate_consecutive_fx: same plugin appears twice in a row on one
+        strip's audio_fx chain (often unintentional)
+      - truncated_name: 11-char binary name + longer auval-resolved name
+        (the binary truncation we know about)
+    """
+    warnings: list[dict] = []
+
+    for track in tracks:
+        # Unresolved + truncated checks across every plugin slot
+        for slot, au in _track_aus(track):
+            resolved = lookup.get(au.fingerprint)
+            if resolved is None:
+                warnings.append({
+                    "kind": "unresolved_plugin",
+                    "track": track.name,
+                    "slot": slot,
+                    "fingerprint": au.fingerprint,
+                    "display_name": au.display_name,
+                })
+            elif (len(au.display_name) == _TRUNCATION_LENGTH
+                  and len(resolved) > _TRUNCATION_LENGTH
+                  and resolved.split(": ", 1)[-1].startswith(au.display_name)):
+                warnings.append({
+                    "kind": "truncated_name",
+                    "track": track.name,
+                    "slot": slot,
+                    "binary_name": au.display_name,
+                    "resolved_name": resolved,
+                    "fingerprint": au.fingerprint,
+                })
+
+        # Consecutive duplicate audio_fx on this strip
+        prev_fp: str | None = None
+        for fx in track.audio_fx:
+            if fx.fingerprint == prev_fp:
+                warnings.append({
+                    "kind": "duplicate_consecutive_fx",
+                    "track": track.name,
+                    "slot": "audio_fx",
+                    "fingerprint": fx.fingerprint,
+                    "display_name": fx.display_name,
+                })
+            prev_fp = fx.fingerprint
+
+    return warnings
+
+
+def filter_metronome(aus: list[AURef], include: bool = False) -> list[AURef]:
+    """Return `aus` with the metronome dropped (default) or included."""
+    if include:
+        return list(aus)
+    return [a for a in aus if not is_metronome_au(a)]
+
+
+def find_phantom_aus(
+    all_aus: list[AURef],
+    tracks: list[Track],
+    include_metronome: bool = False,
+) -> list[AURef]:
+    """Return AUs in `all_aus` that aren't attached to any active user track.
+
+    Phantoms come from undo history, deleted tracks, alternative takes —
+    real plugin references retained by Logic but not currently on a strip
+    the user can edit. Deduped by fingerprint (one phantom entry per
+    distinct plugin); the metronome is filtered by default.
+    """
+    # Collect fingerprints attached to ACTIVE user tracks
+    active_fps: set[str] = set()
+    for track in tracks:
+        if not track.is_active:
+            continue
+        if track.instrument:
+            active_fps.add(track.instrument.fingerprint)
+        for fx in track.midi_fx:
+            active_fps.add(fx.fingerprint)
+        for fx in track.audio_fx:
+            active_fps.add(fx.fingerprint)
+
+    # Anything in all_aus whose fingerprint isn't active is a phantom
+    seen: set[str] = set()
+    out: list[AURef] = []
+    for au in all_aus:
+        if au.fingerprint in active_fps:
+            continue
+        if au.fingerprint in seen:
+            continue
+        if not include_metronome and is_metronome_au(au):
+            continue
+        seen.add(au.fingerprint)
+        out.append(au)
+    return out
+
+
 def _au_to_dict(au: AURef, lookup: dict[str, str]) -> dict:
     """Serialise an AURef to the JSON shape."""
     return {
@@ -1127,6 +1294,7 @@ def project_to_json(
     info: ProjectInfo,
     lookup: dict[str, str],
     raw: bytes | None = None,
+    all_aus: list[AURef] | None = None,
 ) -> str:
     """Serialise project state to a stable JSON wire format.
 
@@ -1159,6 +1327,13 @@ def project_to_json(
     if raw is not None:
         track_list_dicts = _track_list_to_dicts(_build_track_list(info, raw))
 
+    diagnostics = diagnose_project(user_tracks, lookup)
+
+    phantoms_dicts: list[dict] = []
+    if all_aus is not None:
+        phantoms = find_phantom_aus(all_aus, info.tracks)
+        phantoms_dicts = [_au_to_dict(a, lookup) for a in phantoms]
+
     payload = {
         "schema_version": JSON_SCHEMA_VERSION,
         "project": {
@@ -1170,10 +1345,18 @@ def project_to_json(
             "track_count": info.track_count,
             "created_at": info.created_at.isoformat(),
             "modified_at": info.modified_at.isoformat(),
+            "sample_rate": info.sample_rate,
+            "bundle_size_bytes": info.bundle_size_bytes,
+            "audio_file_count": info.audio_file_count,
+            "impulse_response_count": info.impulse_response_count,
+            "frame_rate_index": info.frame_rate_index,
+            "frame_rate": frame_rate_for_index(info.frame_rate_index),
         },
         "tracks": track_dicts,
         "track_list": track_list_dicts,
         "vendors": dict(vendor_counts),
+        "diagnostics": diagnostics,
+        "phantom_plugins": phantoms_dicts,
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
@@ -1247,8 +1430,10 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
     info = parse_project(Path(path))
     lookup = auval_lookup_cached()
 
+    all_aus = deduplicate(find_aus(raw))
+
     if as_json:
-        print(project_to_json(info, lookup, raw=raw))
+        print(project_to_json(info, lookup, raw=raw, all_aus=all_aus))
         return
 
     fmt_dt = "%Y-%m-%d %H:%M"
@@ -1258,6 +1443,12 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
     print(f"Key:            {info.key} {info.gender}")
     print(f"Time signature: {info.sig_numerator}/{info.sig_denominator}")
     print(f"Tempo:          {info.bpm:g} BPM")
+    print(f"Sample rate:    {info.sample_rate} Hz")
+    fr = frame_rate_for_index(info.frame_rate_index)
+    if fr is not None:
+        print(f"Frame rate:     {fr:g} fps")
+    print(f"Bundle size:    {info.bundle_size_bytes / 1024 / 1024:.1f} MB")
+    print(f"Audio files:    {info.audio_file_count}  ({info.impulse_response_count} IRs)")
     print(f"Tracks:         {info.track_count}")
 
     user_tracks = [t for t in info.tracks if t.is_user_track and t.is_active]
@@ -1304,6 +1495,31 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
                 f"{strip_label:9s}  "
                 f"({t.count} regions)"
             )
+
+    phantoms = find_phantom_aus(all_aus, info.tracks)
+    if phantoms:
+        print(f"\n=== PHANTOM PLUGINS ({len(phantoms)}) ===")
+        print("(referenced in ProjectData but on no active track —"
+              "\n undo history, deleted tracks, alternative takes)")
+        for au in phantoms:
+            resolved = lookup.get(au.fingerprint, "")
+            tag = f"  ⟶ {resolved}" if resolved else ""
+            print(f"  • {au.display_name:30s}  [{au.fingerprint}]{tag}")
+
+    diagnostics = diagnose_project(user_tracks, lookup)
+    if diagnostics:
+        print(f"\n=== DIAGNOSTICS ({len(diagnostics)}) ===")
+        for w in diagnostics:
+            kind = w["kind"]
+            track = w.get("track", "?")
+            if kind == "unresolved_plugin":
+                print(f"  ✗ Unresolved plugin {w['fingerprint']!r} on {track!r}"
+                      f" (display: {w['display_name']!r})")
+            elif kind == "duplicate_consecutive_fx":
+                print(f"  ! Duplicate FX {w['display_name']!r} on {track!r}")
+            elif kind == "truncated_name":
+                print(f"  i Truncated name {w['binary_name']!r} → {w['resolved_name']!r}"
+                      f" on {track!r}")
 
     if dump_bplists:
         summarise_bplists(extract_bplists(raw))

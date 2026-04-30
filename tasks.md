@@ -14,27 +14,15 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 `--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
 
+
+
+`--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
+
 #### #21 Homebrew tap + PyPI packaging
 
 Package as installable CLI: `pyproject.toml` `[project.scripts]` entry point, PyPI release workflow, then a Homebrew tap formula. PM identifies Homebrew as "strongest distribution play within the Logic community."
 
 ### Feature additions
-
-#### #22 Phantom plugin distinction
-
-Separate plugins on active tracks vs orphans (undo history, deleted tracks). Surface as a dedicated section per the inspector-mockup design. Makes "is this project clean?" a single-glance answer.
-
-#### #24 Extended metadata
-
-Surface sample rate, bundle size, region count, project length, frame rate index. Sample rate is already in `MetaData.plist` (`SampleRate`), region count is `len(unique_track_names())`, size is `os.stat`, length needs computing from event sequence end.
-
-#### #25 Diagnostics warnings
-
-Surface unresolved 4CCs (no auval match), duplicate consecutive FX on same strip, name-truncation flags. Useful "is this safe to open" check before booting Logic.
-
-#### #26 Klopfgeist default filter
-
-Hide Logic's metronome AU from active-plugin lists by default; expose `--include-metronome` flag for users who want it. CLAUDE.md flags this; mockup also shows it as a phantom by convention.
 
 #### #27 Detect summing/folder tracks (track groups)
 
@@ -167,6 +155,22 @@ Closed by #17 — `vendors` is a top-level field in the JSON output. Standalone 
 #### #36 Replace ad-hoc arg parsing with argparse ✓
 
 `build_parser()` returns an `argparse.ArgumentParser`; `cli(argv=None)` is the entry point that dispatches between inspect/rollup modes and validates path requirements. `__version__` is the single source of truth for `--version` / `-v`. `--help` / `-h` auto-handled. Unknown flags now produce argparse-style errors (`unrecognized arguments: --bogus`) instead of crashing with `StopIteration` deep in `main()`. 11 tests in `tests/test_cli.py`. Unblocks distribution work (#21).
+
+#### #26 Klopfgeist default filter ✓
+
+Defensive filter for Logic's built-in metronome (`aumu/klop/appl`). The current parser doesn't actually surface Apple built-in AUs (manufacturer `appl`) — Logic stores them differently from third-party plugins — but `is_metronome_au()` and `filter_metronome()` are in place against future format changes. 5 tests.
+
+#### #24 Extended metadata ✓
+
+`ProjectInfo` gained `sample_rate`, `bundle_size_bytes`, `audio_file_count`, `impulse_response_count`, `frame_rate_index`. JSON output exposes all + a decoded `frame_rate` (24/25/29.97/30 fps via `frame_rate_for_index()`). Text output adds Sample rate, Frame rate, Bundle size, Audio files lines. 7 tests in `tests/test_extended_metadata.py`.
+
+#### #25 Diagnostics warnings ✓
+
+`diagnose_project()` returns a list of warning dicts. Three kinds emitted: `unresolved_plugin` (no auval match), `duplicate_consecutive_fx` (same plugin twice in a row on a strip), `truncated_name` (11-char binary name + longer auval-resolved). Surfaced in JSON as top-level `diagnostics` array and in text under `=== DIAGNOSTICS ===`. The busy-living project surfaces 36 truncations on guitar strips (CLA Guitars → CLA Guitars (m->s)), validating the truncation detector. 7 tests.
+
+#### #22 Phantom plugin distinction ✓
+
+`find_phantom_aus()` returns AUs in `ProjectData` that aren't attached to any active user track — sources include undo history, deleted tracks, alternative takes. Deduped by fingerprint; the metronome is filtered by default; `include_metronome=True` overrides. JSON exposes as top-level `phantom_plugins` array; text under `=== PHANTOM PLUGINS ===`. 6 tests in `tests/test_phantom_plugins.py`. Inspector mockup highlights this as a key differentiator for "is this project clean?".
 
 #### #28 Strict region→strip bridge ✓ (audio strip mapping)
 
