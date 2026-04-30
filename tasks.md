@@ -155,6 +155,10 @@ Closed by #17 — `vendors` is a top-level field in the JSON output. Standalone 
 
 `rollup_projects()` parses each path (skipping bad ones with a stderr warning), reuses `project_to_json()` per project, and `aggregate_rollup()` produces the final shape: per-project summaries, fingerprints (count of projects each plugin appears in), vendors (manufacturer 4CC → total plugin count). CLI: `--rollup` flag followed by N `.logicx` paths. Verified on the Logic test projects — `EZkeys 2` correctly identified as appearing in 2 of 3 sampled projects. 4 tests in `tests/test_rollup.py`.
 
+#### #36 Replace ad-hoc arg parsing with argparse ✓
+
+`build_parser()` returns an `argparse.ArgumentParser`; `cli(argv=None)` is the entry point that dispatches between inspect/rollup modes and validates path requirements. `__version__` is the single source of truth for `--version` / `-v`. `--help` / `-h` auto-handled. Unknown flags now produce argparse-style errors (`unrecognized arguments: --bogus`) instead of crashing with `StopIteration` deep in `main()`. 11 tests in `tests/test_cli.py`. Unblocks distribution work (#21).
+
 #### #28 Strict region→strip bridge ✓ (audio strip mapping)
 
 Audio-track registry records encode the channel-strip number in the post-name `uint16 LE`. Wired up via `_decode_audio_strip_id()` and surfaced as `TrackEvidence.strip_id` / `RegionCluster.strip_id`. 100% accuracy on the 31 audio tracks in the busy-living test project. Still open: region→strip bridge (different problem — the strip number lives on the registry record, not the region).

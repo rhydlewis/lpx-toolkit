@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Logic Pro project inspector — extracts metadata, tracks, and AU plugins."""
+import argparse
 import json
 import plistlib
 import re
@@ -11,6 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
+
+__version__ = "0.1.0"
 
 # 4CC types stored little-endian in ProjectData.
 AU_TYPES = {
@@ -1314,13 +1317,82 @@ def main_rollup(paths: list[str]) -> None:
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser.
+
+    Two modes share one entry-point:
+      - inspect (default): one project path, optional --json / --bplists
+      - rollup: --rollup followed by N project paths
+
+    `--help` / `-h` and `--version` / `-v` are auto-handled by argparse.
+    """
+    parser = argparse.ArgumentParser(
+        prog="lpx-inspect",
+        description=(
+            "Extract Audio Unit plugin manifest, tracks, and metadata "
+            "from a Logic Pro .logicx project bundle. Read-only."
+        ),
+    )
+    parser.add_argument(
+        "-v", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    # Use mutually-exclusive group at the conceptual level (rollup vs inspect)
+    # but argparse doesn't easily express "either ROLLUP n_paths OR inspect 1 path"
+    # — so we accept --rollup as a flag that swallows the trailing positionals.
+    parser.add_argument(
+        "--rollup",
+        action="store_true",
+        help="Aggregate plugin usage across multiple .logicx projects",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        dest="json",
+        help="Emit structured JSON instead of human-readable text",
+    )
+    parser.add_argument(
+        "--bplists",
+        action="store_true",
+        help="Append a summary of NSKeyedArchive blobs (debug aid)",
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        help="Path to a .logicx project (omit when using --rollup)",
+    )
+    parser.add_argument(
+        "rollup_paths",
+        nargs="*",
+        help=argparse.SUPPRESS,  # internal: extra paths after the first one
+    )
+    return parser
+
+
+def cli(argv: list[str] | None = None) -> int:
+    """CLI entry point. Returns exit code."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.rollup:
+        # Combine the first positional into rollup_paths so the user can write
+        # `--rollup a.logicx b.logicx` naturally.
+        paths = ([args.path] if args.path else []) + (args.rollup_paths or [])
+        if not paths:
+            parser.error("--rollup requires at least one project path")
+        main_rollup(paths)
+        return 0
+
+    if not args.path:
+        parser.error("a project path is required (or use --rollup)")
+
+    if args.rollup_paths:
+        parser.error("multiple positional paths only allowed with --rollup")
+
+    main(args.path, dump_bplists=args.bplists, as_json=args.json)
+    return 0
+
+
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    if "--rollup" in args:
-        args = [a for a in args if a != "--rollup"]
-        main_rollup(args)
-    else:
-        dump = "--bplists" in args
-        as_json = "--json" in args
-        args = [a for a in args if a not in ("--bplists", "--json")]
-        main(args[0], dump_bplists=dump, as_json=as_json)
+    sys.exit(cli())
