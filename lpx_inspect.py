@@ -2040,6 +2040,10 @@ def render_project_html(
         f' · <span class="path">{_e(project_path)}</span>'
         if project_path else ''
     )
+    vendors_block = (
+        f'<div class="label">Manufacturers</div>{vendors_html}'
+        if vendors_html else ''
+    )
 
     return (
         f'<!doctype html>\n<html lang="en"><head>'
@@ -2061,7 +2065,7 @@ def render_project_html(
         f'<aside>'
         f'<div class="label">Project</div>'
         f'{metadata_html}'
-        f'{("<div class=\"label\">Manufacturers</div>" + vendors_html) if vendors_html else ""}'
+        f'{vendors_block}'
         f'</aside>'
         f'<section>'
         f'{tabs_html}'
