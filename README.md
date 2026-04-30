@@ -76,6 +76,9 @@ lpxtool ~/Music/Logic/SomeProject.logicx
 # Self-contained HTML dashboard (opens in your browser)
 lpxtool --html ~/Music/Logic/SomeProject.logicx
 
+# Browse your whole library in a local web app
+lpxtool --serve ~/Music/Logic
+
 # Structured JSON for piping into other tools
 lpxtool --json ~/Music/Logic/SomeProject.logicx
 
@@ -88,6 +91,17 @@ Run `lpxtool --help` for the full flag list.
 ### HTML dashboard
 
 `--html` produces a single self-contained HTML file with project metadata, the track list, FX chains, a vendor rollup, and any "phantom" plugins still referenced from undo history. The file lands in `$TMPDIR/lpx-toolkit-<slug>.html` and opens in your default browser.
+
+### Library browser
+
+`--serve [DIR]` starts a local-only HTTP server (bound to `127.0.0.1`) and opens the index in your default browser. Click any project to view its dashboard, with the same look as `--html`. Defaults to `~/Music/Logic` if `DIR` is omitted.
+
+```sh
+lpxtool --serve                       # browse ~/Music/Logic
+lpxtool --serve --port 8080 ~/Music   # explicit port + directory
+```
+
+JSON endpoints are exposed for tooling: `/api/projects`, `/api/projects/<index>`, `/api/rollup`. Press `Ctrl-C` to stop the server.
 
 ### JSON output
 

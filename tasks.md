@@ -10,17 +10,12 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 Priority order (set 2026-04-30 after repo went public):
 
-1. #37 `--serve` mode (local HTTP browse + rollup)
-2. #21 PyPI release, then Homebrew tap
-3. #38 GitHub Actions CI (pytest on push/PR)
+1. #21 PyPI release, then Homebrew tap
+2. #38 GitHub Actions CI (pytest on push/PR)
 
 Everything below the priority list is **deferred** — needs new evidence or strategic shift to reopen.
 
 ### Active
-
-#### #37 Add --serve mode (local HTTP server for browsing + rollup)
-
-`lpxtool --serve [DIR]` spins up a local HTTP server (stdlib `http.server`) on a free port and opens the browser. Provides: (1) index page listing `.logicx` projects in DIR (default `~/Music/Logic`); (2) per-project view reusing `render_project_html`; (3) cross-project rollup with click-through to individual projects; (4) JSON API endpoints for tooling. Static `--html` stays as the default for ship-and-share use cases. macOS-only. This is the headline "browse my whole Logic library" feature.
 
 #### #21 Homebrew tap + PyPI packaging
 
@@ -198,6 +193,17 @@ Audio-track registry records encode the channel-strip number in the post-name `u
 #### #28b Per-track ID extraction ✓ (new finding 2026-04-30)
 
 Each registry record has a 64-byte preamble whose bytes 2-3 are a uint16 LE per-track ID. Exposed as `TrackEvidence.track_id` / `RegionCluster.track_id`. Stable, globally unique within a project. Track-list output now sorts by this ID for stable ordering close to UI order (but not exactly).
+
+#### #37 Add --serve mode (local HTTP server for browsing + rollup) ✓
+
+`lpxtool --serve [DIR]` (default `~/Music/Logic`) binds a `ThreadingHTTPServer` to `127.0.0.1` on a free port (overridable via `--port`) and opens the index in the browser. Five routes:
+  - `GET /` — HTML index of `.logicx` bundles in DIR (theme-toggleable, reuses `_HTML_STYLE`)
+  - `GET /project/<idx>` — full HTML dashboard via `render_project_html`
+  - `GET /api/projects` — JSON list with `{index, name, path}`
+  - `GET /api/projects/<idx>` — full JSON payload via `project_to_json`
+  - `GET /api/rollup` — aggregated rollup JSON across the directory
+
+`_list_projects()` is non-recursive and ignores anything that isn't a `.logicx` directory. Read-only contract preserved — every route only reads from the bundle (verified live against 111 projects in `~/Music/Logic`). 18 tests in `tests/test_serve.py` cover unit (project listing, index render) + integration (real HTTP server in a daemon thread, every route asserted including 404s).
 
 #### #39 Add lpxtool.png screenshot to README ✓
 

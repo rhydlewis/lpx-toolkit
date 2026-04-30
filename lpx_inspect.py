@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Logic Pro project inspector — extracts metadata, tracks, and AU plugins."""
 import argparse
+import http.server
 import json
 import plistlib
 import re
 import struct
 import subprocess
 import sys
+import threading
+import urllib.parse
+import webbrowser
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -2240,6 +2244,262 @@ def main_rollup(paths: list[str]) -> None:
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
+# --- --serve mode (#37) ------------------------------------------------------
+#
+# Local HTTP server bound to 127.0.0.1 that lets the user browse every
+# .logicx in a directory through the same HTML dashboard as `--html`,
+# plus JSON endpoints for tooling. macOS-only in practice (auval is the
+# bottleneck) but the server itself is platform-agnostic.
+
+_SERVE_INDEX_STYLE = """
+.proj-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px; max-width: 1400px; margin: 0 auto;
+}
+a.proj-card {
+  display: block; padding: 18px 20px;
+  border: 1px solid var(--line); background: var(--ink-2);
+  text-decoration: none; color: var(--bone);
+  transition: background-color .15s, border-color .15s;
+}
+a.proj-card:hover { background: var(--ink-3); border-color: var(--amber-dim); }
+.proj-card .proj-name {
+  font-family: "Fraunces", "Iowan Old Style", serif;
+  font-style: italic; font-weight: 400;
+  font-size: 22px; line-height: 1.1; color: var(--bone);
+  margin-bottom: 6px; word-break: break-word;
+}
+.proj-card .proj-path {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--grey); word-break: break-all;
+}
+.proj-empty {
+  border: 1px dashed var(--line); padding: 28px; text-align: center;
+  color: var(--grey); font-size: 12px; letter-spacing: .14em;
+  text-transform: uppercase;
+}
+"""
+
+
+def _list_projects(directory: Path) -> list[Path]:
+    """Sorted list of .logicx bundles directly inside `directory`.
+
+    Non-recursive — Logic doesn't nest projects, and recursing risks
+    walking into unrelated trees. Returns [] for missing directories
+    (so the index page can still render a sensible empty state).
+    """
+    directory = Path(directory)
+    if not directory.is_dir():
+        return []
+    return sorted(
+        p for p in directory.iterdir()
+        if p.is_dir() and p.suffix == ".logicx"
+    )
+
+
+def _render_serve_index(directory: Path, projects: list[Path]) -> str:
+    """HTML for the / route — clickable list of projects in `directory`.
+
+    Reuses _HTML_STYLE so the index inherits the dashboard's typography
+    and theme variables; the theme toggle is wired up the same way.
+    """
+    boot_script = (
+        '<script>(function(){try{'
+        "var t=localStorage.getItem('lpxtool-theme');"
+        "if(t)document.documentElement.setAttribute('data-theme',t);"
+        '}catch(e){}})();</script>'
+    )
+    toggle_button = (
+        '<button id="theme-toggle" class="theme-toggle" type="button" '
+        'aria-label="Toggle light/dark theme" title="Toggle light/dark theme">'
+        '◐</button>'
+    )
+    toggle_script = (
+        '<script>(function(){'
+        "var b=document.getElementById('theme-toggle');if(!b)return;"
+        "b.addEventListener('click',function(){"
+        'var r=document.documentElement;'
+        "var next=r.getAttribute('data-theme')==='light'?'dark':'light';"
+        "r.setAttribute('data-theme',next);"
+        "try{localStorage.setItem('lpxtool-theme',next);}catch(e){}"
+        '});})();</script>'
+    )
+
+    if projects:
+        cards = "".join(
+            f'<a class="proj-card" href="/project/{i}">'
+            f'<div class="proj-name">{_e(p.stem)}</div>'
+            f'<div class="proj-path">{_e(str(p))}</div>'
+            f'</a>'
+            for i, p in enumerate(projects)
+        )
+        body = f'<div class="proj-grid">{cards}</div>'
+    else:
+        body = (
+            '<div class="proj-empty">'
+            'No .logicx projects found in this directory.'
+            '</div>'
+        )
+
+    return (
+        '<!doctype html>\n<html lang="en"><head>'
+        '<meta charset="utf-8" />'
+        '<meta name="viewport" content="width=device-width, initial-scale=1" />'
+        '<title>lpx-toolkit · library</title>'
+        f'{boot_script}'
+        '<link rel="preconnect" href="https://fonts.googleapis.com" />'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
+        '<link href="https://fonts.googleapis.com/css2?'
+        'family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&'
+        'family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,400&'
+        'display=swap" rel="stylesheet" />'
+        f'<style>{_HTML_STYLE}{_SERVE_INDEX_STYLE}</style>'
+        '</head><body>'
+        f'{toggle_button}'
+        '<h1 class="h-display"><em>lpx</em>·toolkit</h1>'
+        f'<p class="h-sub">{_e(str(directory))} · '
+        f'{len(projects)} project{"s" if len(projects) != 1 else ""}</p>'
+        f'{body}'
+        '<footer class="footer">lpx-toolkit · read-only · serving locally</footer>'
+        f'{toggle_script}'
+        '</body></html>\n'
+    )
+
+
+def make_serve_handler(directory: Path):
+    """Return a BaseHTTPRequestHandler subclass bound to `directory`.
+
+    Routes:
+      GET /                    HTML index of projects
+      GET /project/<idx>       HTML dashboard for one project
+      GET /api/projects        JSON list of projects in the directory
+      GET /api/projects/<idx>  Full JSON payload for one project
+      GET /api/rollup          Aggregated rollup JSON across the directory
+    """
+    directory = Path(directory)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        # Quiet the default access log; the user wants a clean terminal.
+        def log_message(self, fmt, *args):
+            return
+
+        def do_GET(self):  # noqa: N802 — required name
+            route = urllib.parse.urlparse(self.path).path
+
+            if route == "/":
+                projects = _list_projects(directory)
+                self._send(200, "text/html", _render_serve_index(directory, projects))
+                return
+
+            if route == "/api/projects":
+                projects = _list_projects(directory)
+                payload = [
+                    {"index": i, "name": p.stem, "path": str(p)}
+                    for i, p in enumerate(projects)
+                ]
+                self._send(200, "application/json", json.dumps(payload, indent=2))
+                return
+
+            if route == "/api/rollup":
+                projects = _list_projects(directory)
+                lookup = auval_lookup_cached()
+                payload = rollup_projects(projects, lookup)
+                self._send(200, "application/json", json.dumps(payload, indent=2))
+                return
+
+            project_html_match = re.fullmatch(r"/project/(\d+)", route)
+            if project_html_match:
+                idx = int(project_html_match.group(1))
+                projects = _list_projects(directory)
+                if 0 <= idx < len(projects):
+                    project_path = projects[idx]
+                    lookup = auval_lookup_cached()
+                    info = parse_project(project_path)
+                    payload = json.loads(project_to_json(info, lookup=lookup))
+                    html = render_project_html(
+                        payload, lookup=lookup, project_path=str(project_path)
+                    )
+                    self._send(200, "text/html", html)
+                    return
+                self._send(404, "text/plain", "project index out of range\n")
+                return
+
+            project_json_match = re.fullmatch(r"/api/projects/(\d+)", route)
+            if project_json_match:
+                idx = int(project_json_match.group(1))
+                projects = _list_projects(directory)
+                if 0 <= idx < len(projects):
+                    project_path = projects[idx]
+                    lookup = auval_lookup_cached()
+                    info = parse_project(project_path)
+                    self._send(
+                        200, "application/json",
+                        project_to_json(info, lookup=lookup),
+                    )
+                    return
+                self._send(404, "text/plain", "project index out of range\n")
+                return
+
+            self._send(404, "text/plain", "not found\n")
+
+        def _send(self, status: int, content_type: str, body: str) -> None:
+            data = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", f"{content_type}; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    return Handler
+
+
+def start_serve(
+    directory: Path,
+    port: int = 0,
+    *,
+    open_browser: bool = True,
+) -> tuple[http.server.ThreadingHTTPServer, int]:
+    """Bind and return (httpd, port). Caller drives `serve_forever()`.
+
+    `port=0` asks the OS for a free port; the actual port is returned.
+    `open_browser` opens the index in the default browser shortly after
+    binding (used for the `--serve` CLI; tests pass False).
+    """
+    handler = make_serve_handler(directory)
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    actual_port = httpd.server_address[1]
+
+    if open_browser:
+        url = f"http://127.0.0.1:{actual_port}/"
+        # Defer the browser launch slightly so serve_forever() is ready
+        # to accept the first connection.
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    return httpd, actual_port
+
+
+def main_serve(directory: str | None, port: int = 0) -> int:
+    """`--serve` entry point. Blocks until Ctrl-C."""
+    target = Path(directory).expanduser() if directory else Path("~/Music/Logic").expanduser()
+    if not target.is_dir():
+        print(f"--serve: not a directory: {target}", file=sys.stderr)
+        return 2
+
+    httpd, actual_port = start_serve(target, port=port, open_browser=True)
+    print(
+        f"lpxtool serving {target} on http://127.0.0.1:{actual_port}/",
+        file=sys.stderr,
+    )
+    print("Press Ctrl-C to stop.", file=sys.stderr)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("", file=sys.stderr)  # newline after ^C
+    finally:
+        httpd.server_close()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI argument parser.
 
@@ -2286,6 +2546,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate a self-contained HTML dashboard and open it in the browser",
     )
     parser.add_argument(
+        "--serve",
+        action="store_true",
+        help=(
+            "Start a local HTTP server to browse all .logicx projects in a "
+            "directory (default: ~/Music/Logic). Pass a directory as the "
+            "positional argument to override."
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help="Port for --serve (default: pick a free port)",
+    )
+    parser.add_argument(
         "path",
         nargs="?",
         help="Path to a .logicx project (omit when using --rollup)",
@@ -2302,6 +2577,11 @@ def cli(argv: list[str] | None = None) -> int:
     """CLI entry point. Returns exit code."""
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.serve:
+        if args.rollup_paths:
+            parser.error("--serve takes at most one directory")
+        return main_serve(args.path, port=args.port)
 
     if args.rollup:
         # Combine the first positional into rollup_paths so the user can write
