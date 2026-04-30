@@ -392,6 +392,57 @@ def test_render_button_links_to_file_url_for_project_path(tmp_path):
     assert f"file://{project_path}" in out
 
 
+def test_render_resolves_manufacturer_full_name_in_vendor_rollup():
+    """Vendor rollup uses the auval-resolved manufacturer name when known
+    (e.g. 'Soundtoys [SToy]' instead of bare 'SToy')."""
+    payload = {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 0,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [], "track_list": [],
+        "vendors": {"SToy": 2, "Toon": 1},
+        "diagnostics": [], "phantom_plugins": [],
+    }
+    lookup = {
+        "aufx/EB  /SToy": "Soundtoys: EchoBoy",
+        "aumf/FXR /SToy": "Soundtoys: EffectRack",
+        "aumu/EZk2/Toon": "Toontrack: EZkeys 2",
+    }
+    out = render_project_html(payload, lookup=lookup, project_path="/x.logicx")
+    # Manufacturer label takes the form "<Name> [<4CC>]"
+    assert "Soundtoys" in out
+    assert "Toontrack" in out
+
+
+def test_render_falls_back_to_4cc_when_manufacturer_unknown():
+    """When auval lookup has no plugins for a vendor 4CC, the rollup row
+    shows just the 4CC (still useful — same as before the lookup feature)."""
+    payload = {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 0,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [], "track_list": [],
+        "vendors": {"UNKN": 1},
+        "diagnostics": [], "phantom_plugins": [],
+    }
+    out = render_project_html(payload, lookup={}, project_path="/x.logicx")
+    assert "UNKN" in out
+
+
 def test_render_does_not_include_open_in_logic_or_clipboard_command(tmp_path):
     """The previous clipboard-copy button is gone — no `open -a` shell
     command should be emitted."""

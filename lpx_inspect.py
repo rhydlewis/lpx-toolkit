@@ -1461,6 +1461,26 @@ def _render_tracks_table(tracks: list[dict]) -> str:
     return "".join(parts)
 
 
+def _vendor_display_name(vendor_4cc: str, lookup: dict[str, str]) -> str:
+    """Best human-readable manufacturer name for a 4CC, derived from auval.
+
+    auval entries are formatted 'Manufacturer: Plugin Name'. We take the
+    most common 'Manufacturer' prefix across all plugins from this vendor
+    and fall back to the raw 4CC when no auval data is present.
+    """
+    suffix = f"/{vendor_4cc}"
+    counts: Counter[str] = Counter()
+    for fp, label in lookup.items():
+        if not fp.endswith(suffix):
+            continue
+        if ": " in label:
+            counts[label.split(": ", 1)[0]] += 1
+    if not counts:
+        return vendor_4cc
+    name, _ = counts.most_common(1)[0]
+    return f"{name} [{vendor_4cc}]"
+
+
 def _vendor_used_fingerprints(payload: dict) -> dict[str, set[str]]:
     """Manufacturer 4CC → set of fingerprints used (in this project)."""
     out: dict[str, set[str]] = {}
@@ -1552,6 +1572,7 @@ def _render_vendor_rollup(
     parts = ['<div class="sheet">']
     for vendor, count in sorted(vendors.items(), key=lambda x: -x[1]):
         pct = (count / max_count) * 100
+        display_name = _vendor_display_name(vendor, lookup or {})
         if has_lookup:
             drilldown = _render_vendor_drilldown(
                 vendor, used_by_vendor.get(vendor, set()), track_counts, lookup,
@@ -1559,7 +1580,7 @@ def _render_vendor_rollup(
             parts.append(
                 f'<details class="vendor-row vendor-expandable">'
                 f'<summary>'
-                f'<div class="name">{_e(vendor)}</div>'
+                f'<div class="name">{_e(display_name)}</div>'
                 f'<div class="bar" style="--w:{pct:.0f}%"></div>'
                 f'<div class="count">{count}</div>'
                 f'</summary>'
@@ -1569,7 +1590,7 @@ def _render_vendor_rollup(
         else:
             parts.append(
                 f'<div class="vendor-row">'
-                f'<div class="name">{_e(vendor)}</div>'
+                f'<div class="name">{_e(display_name)}</div>'
                 f'<div class="bar" style="--w:{pct:.0f}%"></div>'
                 f'<div class="count">{count}</div>'
                 f'</div>'
