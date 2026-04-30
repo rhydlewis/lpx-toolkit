@@ -1,5 +1,7 @@
 # lpx-toolkit
 
+[![tests](https://github.com/rhydlewis/lpx-toolkit/actions/workflows/test.yml/badge.svg)](https://github.com/rhydlewis/lpx-toolkit/actions/workflows/test.yml)
+
 Inspect a Logic Pro project from the command line — see every plugin, track, and bit of metadata without opening Logic.
 
 > [!WARNING]

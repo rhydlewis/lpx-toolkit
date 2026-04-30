@@ -12,20 +12,44 @@ Priority order (set 2026-04-30 after repo went public):
 
 1. #21 PyPI release, then Homebrew tap
 2. #38 GitHub Actions CI (pytest on push/PR)
+3. #41 Promotion on forums and Reddit
 
-Everything below the priority list is **deferred** — needs new evidence or strategic shift to reopen.
+Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github.com/rhydlewis/lpx-toolkit/issues/1)–[#4](https://github.com/rhydlewis/lpx-toolkit/issues/4).
 
 ### Active
 
 #### #21 Homebrew tap + PyPI packaging
 
-Package as installable CLI for distribution. Now that the repo is public, the immediate win is PyPI: once published, the README's headline install becomes `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Steps: confirm `pyproject.toml` is publish-ready (name, version, classifiers ✓ already), build with `python -m build`, upload via `twine` to TestPyPI first, then real PyPI. Homebrew tap is a follow-up — the formula just needs a `pip install` shim around the PyPI release.
+Package as installable CLI for distribution. Now that the repo is public, the immediate win is PyPI: once published, the README's headline install becomes `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Steps: confirm `pyproject.toml` is publish-ready, build with `python -m build`, upload via `twine` to TestPyPI first, then real PyPI. Homebrew tap is a follow-up — the formula just needs a `pip install` shim around the PyPI release.
 
 #### #38 GitHub Actions CI (pytest on push/PR)
 
-Add `.github/workflows/test.yml` running `pytest` against `python-3.10` / `3.11` / `3.12` on `macos-latest`. Should run on `push` to main and on every PR. Cheap to set up, signals "maintained" to anyone landing on the repo, and protects against regressions when contributors arrive. Uses the existing `requirements-dev.txt`. No fixture project in the repo, so the integration tests stay env-gated and naturally skip in CI.
+Add `.github/workflows/test.yml` running `pytest` against `python-3.10` / `3.11` / `3.12` / `3.13` on `macos-latest`. Should run on `push` to main and on every PR. Cheap to set up, signals "maintained" to anyone landing on the repo, and protects against regressions when contributors arrive. Uses the existing `requirements-dev.txt`. No fixture project in the repo, so the integration tests stay env-gated and naturally skip in CI.
 
-### Deferred (need new evidence to reopen)
+#### #41 Promotion on forums and Reddit `[user-actioned]`
+
+Get the tool in front of Logic Pro users and music producers. Not a coding task — needs the user's voice for the post copy.
+
+**Where to post:**
+- r/LogicPro — primary audience. Mention "before you open a project on a new machine, see every plugin it needs". Lead with the rollup view image.
+- r/WeAreTheMusicMakers — secondary. Frame as "audit your plugin library, see which ones you actually use".
+- logicprohelp.com — Logic-specific forum, longer-form post likely OK.
+- Hacker News — `Show HN: lpx-toolkit — read-only Logic Pro project inspector`. Lead with the reverse-engineering angle (undocumented binary format, parsed offline) rather than the music-production angle.
+- Mastodon (#LogicPro / #musicproduction tags) and any DAW Discord communities the user frequents.
+
+**Hook**: read-only by design (safe), runs offline (privacy), HTML dashboard, cross-project rollup answers "which of my installed plug-ins do I actually use?", source-available + free.
+
+**Distinctive vs other tools**: most "Logic project utilities" require Logic to be running. This doesn't — it parses the project file directly. That's the wedge.
+
+**Materials ready**: README (with two screenshots), CONTRIBUTING.md, four open reverse-engineering issues for community participation, public repo at https://github.com/rhydlewis/lpx-toolkit.
+
+### Deferred (now tracked as GitHub issues)
+
+[#1](https://github.com/rhydlewis/lpx-toolkit/issues/1) Track Stack parent→child mapping · [#2](https://github.com/rhydlewis/lpx-toolkit/issues/2) Region→strip bridge · [#3](https://github.com/rhydlewis/lpx-toolkit/issues/3) Hidden-track flag · [#4](https://github.com/rhydlewis/lpx-toolkit/issues/4) UI track-row order
+
+Investigation logs preserved below for reference.
+
+### Deferred — investigation logs
 
 #### #27 Detect summing/folder tracks (track groups) `[deferred 2026-04-30]`
 

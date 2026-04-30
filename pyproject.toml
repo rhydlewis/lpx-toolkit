@@ -17,16 +17,23 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Multimedia :: Sound/Audio :: Editors",
+    "Topic :: Software Development :: Libraries",
 ]
 
 [project.scripts]
 lpxtool = "lpx_inspect:cli"
 
 [project.urls]
+Homepage = "https://github.com/rhydlewis/lpx-toolkit"
 Repository = "https://github.com/rhydlewis/lpx-toolkit"
+Issues = "https://github.com/rhydlewis/lpx-toolkit/issues"
 
 [tool.setuptools]
 py-modules = ["lpx_inspect"]

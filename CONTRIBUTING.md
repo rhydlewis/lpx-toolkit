@@ -60,6 +60,37 @@ Several pieces of the `.logicx` format are still partially understood. Each has 
 
 Ground-truth-driven diffs (a tiny project saved twice with one specific change) are the most productive way to attack any of these.
 
+## Releasing to PyPI
+
+For maintainers cutting a new release:
+
+```sh
+# Bump version in pyproject.toml first, e.g. 0.1.0 → 0.1.1.
+
+# Clean previous artefacts.
+rm -rf dist build *.egg-info
+
+# Build both sdist and wheel.
+.venv/bin/pip install build twine
+.venv/bin/python -m build
+
+# Sanity-check the artefacts (README rendering, metadata, classifiers).
+.venv/bin/python -m twine check dist/*
+
+# Upload to TestPyPI first to verify everything works end-to-end.
+.venv/bin/python -m twine upload --repository testpypi dist/*
+uvx --from testpypi lpx-toolkit --version   # quick smoke from TestPyPI
+
+# Once TestPyPI looks good, upload to real PyPI.
+.venv/bin/python -m twine upload dist/*
+
+# Tag the release in git.
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
+```
+
+After PyPI publish, the README's headline install becomes `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Update the install snippet to reflect that.
+
 ## Reporting issues
 
 If `lpxtool` fails on a project of yours and you can share it (or a sanitised copy), include:
