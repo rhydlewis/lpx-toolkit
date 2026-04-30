@@ -1,21 +1,13 @@
 # lpx-toolkit
 
-A Python tool that extracts the plugin manifest, track list, and metadata from a Logic Pro project file (`.logicx`) without opening Logic.
+Inspect a Logic Pro project from the command line — see every plugin, track, and bit of metadata without opening Logic.
 
-Read-only by design. The format is undocumented, so writing back is permanently out of scope — see `CLAUDE.md`.
-
-## What it does
-
-Given a `.logicx` project package, `lpx-toolkit` parses the binary `ProjectData` file and reports:
-
-- Project metadata: name, key, time signature, tempo, created/modified dates, track count
-- Active channel strips with their kind (audio/instrument/aux/bus)
-- Per-strip plugin chain — instrument, MIDI FX, audio FX — with auval-resolved display names
-- User-renamed track labels recovered from region records
-
-Sample output:
+> [!WARNING]
+> **Use at your own risk.** `lpx-toolkit` parses an undocumented binary format that Apple may change at any time. It is strictly read-only — there is a SHA-256 invariant test that fails the build if any byte of a project is ever modified — but you are still pointing it at irreplaceable creative work. Always keep backups. The author accepts no liability for project corruption, data loss, or anything else that might go wrong.
 
 ```
+$ lpxtool ~/Music/Logic/piano.logicx
+
 Project:        piano
 Created:        2024-02-29 20:23
 Modified:       2024-03-01 13:55
@@ -33,104 +25,97 @@ Tracks:         3
         Instrument: Arturia: Pigments [aumu/Kat1/Artu]
 ```
 
-## How it works
+## Why you might want this
 
-`.logicx` is a macOS bundle. Inside, `Alternatives/000/ProjectData` is undocumented binary. The parser was reverse-engineered empirically:
-
-- AU plugin descriptors live as 12-byte chunks: `manufacturer + type + subtype` 4CCs stored little-endian. The type field is the anchor (`umua`/`xfua`/`fmua` reversed).
-- Channel strips appear as `OCuA` records, each carrying a 16-byte name field followed by a 4-byte type code.
-- User-given track names are stored inside `gRuA` (Audio Region) records — name is at offset +112, length-prefixed by a uint16 LE.
-- `auval -l` maps captured fingerprints to canonical plugin names from the system Audio Unit registry.
-- `MetaData.plist` (a standard Apple plist) supplies key/tempo/time signature.
-
-The parser depends only on the Python standard library. `auval` is the only external call, and only when running on macOS.
-
-See `CLAUDE.md` for a detailed walk through the format and the specific quirks that have been encountered.
-
-## Caveats
-
-- **Not a live state read.** `ProjectData` retains references to plugins from undo history, alternative takes, and previously-deleted tracks. The output is "every AU this project has referenced", not "what's loaded right now".
-- **Display names truncate to ~11 characters in the binary.** Full names recovered via `auval -l` when the plugin is installed.
-- **`auval` requires the plugins to be installed.** Missing plugins still surface as a fingerprint — useful for "what dependencies do I need before opening this".
-- **Format is undocumented.** Apple does not publish the `ProjectData` format. Extraction relies on observed patterns; future Logic versions may shift the layout.
+- **"Which plugins does this project need?"** Before opening a project on a new machine, see the full plugin manifest up front.
+- **"Which of my installed plugins do I actually use?"** Run `--rollup` across your whole library to find out.
+- **"What's in this project file?"** Inspect tempo, key, track list, and FX chains for any project — even ones you can't open because a plugin is missing.
+- **Scripting and automation.** Pipe `--json` into other tools, generate reports, audit project archives.
 
 ## Requirements
 
-- macOS (for `auval`; the parsing itself is platform-agnostic)
-- Python 3.10+
-- A Logic Pro project to inspect
+- macOS
+- Python 3.10 or newer
+- A `.logicx` project to inspect
 
 ## Install
 
-```sh
-# Set up a venv and install editable
-python3 -m venv .venv
-.venv/bin/pip install -e .
+The easiest route is [`uv`](https://docs.astral.sh/uv/) — no clone, no venv, no install. If you have `uv`, you can run `lpxtool` straight from GitHub:
 
-# Optional: make the `lpxtool` command available outside the venv
-ln -sf "$(pwd)/.venv/bin/lpxtool" ~/bin/lpxtool   # if ~/bin is on PATH
-# or
-brew install pipx && pipx install -e .            # isolated, system-wide
+```sh
+uvx --from git+https://github.com/rhydlewis/lpx-toolkit lpxtool ~/Music/Logic/SomeProject.logicx
 ```
 
-After install, the `lpxtool` command is available.
+`uvx` builds an isolated environment on first run and caches it; subsequent runs are instant. This is the Python equivalent of `npx`.
+
+Prefer a permanent install? Use [`pipx`](https://pipx.pypa.io/):
+
+```sh
+pipx install git+https://github.com/rhydlewis/lpx-toolkit
+lpxtool ~/Music/Logic/SomeProject.logicx
+```
+
+Or clone and install into a virtual environment:
+
+```sh
+git clone https://github.com/rhydlewis/lpx-toolkit.git
+cd lpx-toolkit
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/lpxtool ~/Music/Logic/SomeProject.logicx
+```
 
 ## Usage
 
 ```sh
+# Plain text report
 lpxtool ~/Music/Logic/SomeProject.logicx
-lpxtool ~/Music/Logic/SomeProject.logicx --bplists
-lpxtool ~/Music/Logic/SomeProject.logicx --json
-lpxtool ~/Music/Logic/SomeProject.logicx --html
+
+# Self-contained HTML dashboard (opens in your browser)
+lpxtool --html ~/Music/Logic/SomeProject.logicx
+
+# Structured JSON for piping into other tools
+lpxtool --json ~/Music/Logic/SomeProject.logicx
+
+# Audit plugin usage across many projects at once
 lpxtool --rollup ~/Music/Logic/*.logicx
 ```
 
-You can still invoke as a script during development:
+Run `lpxtool --help` for the full flag list.
 
-```sh
-python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx
-```
+### HTML dashboard
 
-The `--json` flag emits a structured payload (project metadata, per-track strip + plugin chain, vendor rollup) for piping into other tools. Schema is versioned via the top-level `schema_version` field (currently `1`).
+`--html` produces a single self-contained HTML file with project metadata, the track list, FX chains, a vendor rollup, and any "phantom" plugins still referenced from undo history. The file lands in `$TMPDIR/lpx-toolkit-<slug>.html` and opens in your default browser.
 
-The `--html` flag generates a self-contained HTML dashboard (project metadata, tracks table, FX chains, vendor rollup, phantom plugins, diagnostics) and opens it in the macOS default browser. Output lands in `$TMPDIR/lpx-toolkit-<slug>.html`.
+### JSON output
 
-```sh
-# Just one project — opens the dashboard in your browser
-lpxtool --html ~/Music/Logic/SomeProject.logicx
-```
+`--json` emits a structured payload (project metadata, per-track strip + plugin chain, vendor rollup). The schema is versioned via a top-level `schema_version` field (currently `1`).
 
 ### Cross-project rollup
 
-Pass `--rollup` followed by multiple `.logicx` paths to aggregate plugin usage across many projects. Answers "which of my installed plugins do I actually use?":
+`--rollup` aggregates plugin usage across many projects:
 
 ```sh
-python3 lpx_inspect.py --rollup ~/Music/Logic/*.logicx
+lpxtool --rollup ~/Music/Logic/*.logicx
 ```
 
-Output is a JSON payload with per-project summaries plus aggregated `fingerprints` (count of projects each plugin appears in) and `vendors` (total plugin count per manufacturer). Bad projects are skipped with a warning to stderr; the rollup still completes.
+Output is JSON with per-project summaries plus aggregated counts: `fingerprints` (how many projects each plugin appears in) and `vendors` (total plugin count per manufacturer). Unparseable projects are skipped with a warning to stderr; the rollup still completes.
 
-## Tests
+## Caveats
 
-The runtime parser is stdlib-only; pytest is a dev-only dep:
+- **Not a live state read.** A `.logicx` project retains references to plugins from undo history, alternative takes, and previously-deleted tracks. The output is "every plugin this project has ever referenced", not "what's loaded right now".
+- **Display names can truncate.** Logic stores plugin names as ~11-character fields in the binary. Full names are recovered via `auval` when the plugin is installed.
+- **`auval` needs the plugins installed** to resolve full names. Missing plugins still surface as a fingerprint — useful for "what do I need before opening this on another machine".
+- **Format is undocumented.** Apple does not publish the `.logicx` internal format. Extraction relies on observed patterns and may need updates for future Logic versions.
+- **Read-only.** This tool never writes to a `.logicx` file. There is no plan to ever support writing — the format is too risky to modify safely.
 
-```sh
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/pytest
-```
+## Privacy
 
-To run the integration tests against a real project, point `LPX_TEST_PROJECT` at it:
+Everything runs locally. Your projects never leave your machine, and `auval` is the only external command invoked. There is no telemetry, network call, or upload of any kind.
 
-```sh
-LPX_TEST_PROJECT=~/Music/Logic/SomeProject.logicx .venv/bin/pytest
-```
+## Contributing
 
-## Project status
-
-Working tool. The track list, plugin chains, and metadata extraction are stable. The full per-strip mapping for user-renamed tracks is the headline open question — see `CLAUDE.md` § *Region records and user-renamed track names* for what's been ruled out.
-
-`pm-feedback.md` records the strategic priorities. `CLAUDE.md` records the read-only contract, format notes, and out-of-scope items.
+Bug reports, feature ideas, and PRs are all welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development setup and the areas where help is wanted.
 
 ## Licence
 
