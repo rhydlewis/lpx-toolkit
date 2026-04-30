@@ -1303,17 +1303,26 @@ body {
 /* Vendor drill-down (expandable rows) */
 details.vendor-expandable { display: block; padding: 0; }
 details.vendor-expandable summary {
+  position: relative;
   display: grid; grid-template-columns: 1fr auto auto;
-  align-items: center; gap: 10px; padding: 7px 14px;
+  align-items: center; gap: 10px;
+  padding: 7px 14px 7px 32px;          /* room for the absolute chevron */
   font-size: 12px; cursor: pointer; list-style: none;
   border-bottom: 1px dashed var(--line);
 }
 details.vendor-expandable summary::-webkit-details-marker { display: none; }
+/* Position the chevron absolutely so it doesn't participate in the grid
+   (a grid `::before` would steal the first column and push every other
+   cell one slot to the right). */
 details.vendor-expandable summary::before {
-  content: "▸"; color: var(--grey-2); margin-right: 6px;
-  display: inline-block; transition: transform .15s;
+  content: "▸"; color: var(--grey-2);
+  position: absolute; left: 14px; top: 50%;
+  transform: translateY(-50%);
+  transition: transform .15s;
 }
-details[open].vendor-expandable summary::before { transform: rotate(90deg); }
+details[open].vendor-expandable summary::before {
+  transform: translateY(-50%) rotate(90deg);
+}
 details.vendor-expandable .name { color: var(--bone-dim); }
 details.vendor-expandable .bar {
   width: 90px; height: 6px; background: var(--ink-3);
