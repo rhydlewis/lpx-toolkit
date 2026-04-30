@@ -903,7 +903,13 @@ def _bundle_dates(path: Path) -> tuple[datetime, datetime]:
 
 
 def parse_project(logicx_path: Path) -> ProjectInfo:
-    alt = next(logicx_path.glob("Alternatives/*"))
+    logicx_path = Path(logicx_path)
+    alt = next(iter(logicx_path.glob("Alternatives/*")), None)
+    if alt is None:
+        raise FileNotFoundError(
+            f"{logicx_path}: not a valid .logicx bundle "
+            "(no Alternatives/ directory)"
+        )
     md = plistlib.load(open(alt / "MetaData.plist", "rb"))
     raw = (alt / "ProjectData").read_bytes()
 
@@ -2508,9 +2514,13 @@ def main(
 
 
 def main_rollup(paths: list[str]) -> None:
-    """Cross-project rollup mode — emits aggregated JSON."""
+    """Cross-project rollup mode — emits aggregated JSON.
+
+    Accepts a mix of `.logicx` paths and directories; directories are
+    expanded to their `.logicx` children. See `_expand_rollup_paths`.
+    """
     lookup = auval_lookup_cached()
-    bundle_paths = [Path(p) for p in paths]
+    bundle_paths = _expand_rollup_paths(paths)
     result = rollup_projects(bundle_paths, lookup)
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
@@ -2627,6 +2637,51 @@ a.proj-card:hover {
 """
 
 
+def _expand_rollup_paths(paths: list[str]) -> list[Path]:
+    """Resolve user input to an explicit, deduplicated list of .logicx
+    bundles for `--rollup`.
+
+    Each input may be:
+      - a path to a `.logicx` bundle      → kept as-is
+      - a path to a directory             → expanded to its `.logicx` children
+                                            (non-recursive, sorted)
+      - missing or anything else          → skipped with a stderr warning
+
+    `lpxtool --rollup ~/Music/Logic` and `lpxtool --rollup ~/Music/Logic/*.logicx`
+    therefore produce the same set; the user never has to remember which
+    form to use.
+    """
+    seen: set[Path] = set()
+    result: list[Path] = []
+    for raw in paths:
+        p = Path(raw).expanduser()
+        if not p.exists():
+            print(f"[rollup] skipped {p}: not found", file=sys.stderr)
+            continue
+        # Direct .logicx bundle
+        if p.is_dir() and p.suffix == ".logicx":
+            if p not in seen:
+                seen.add(p)
+                result.append(p)
+            continue
+        # Directory — auto-glob children
+        if p.is_dir():
+            children = _list_projects(p)
+            if not children:
+                print(
+                    f"[rollup] {p}: no .logicx bundles found",
+                    file=sys.stderr,
+                )
+            for child in children:
+                if child not in seen:
+                    seen.add(child)
+                    result.append(child)
+            continue
+        # File of some kind, but not a bundle
+        print(f"[rollup] skipped {p}: not a .logicx bundle", file=sys.stderr)
+    return result
+
+
 def _list_projects(directory: Path) -> list[Path]:
     """Sorted list of .logicx bundles directly inside `directory`.
 
@@ -2717,6 +2772,32 @@ def _render_serve_index(label, projects: list[Path]) -> str:
         f'{body}'
         f'{_render_footer(suffix="serving locally")}'
         f'{toggle_script}'
+        '</body></html>\n'
+    )
+
+
+def _render_serve_error(project_path, exc: Exception) -> str:
+    """Lightweight HTML 500 for when parse_project() fails on one bundle.
+    Keeps the rest of the server responsive — only the offending route
+    surfaces the error.
+    """
+    return (
+        '<!doctype html>\n<html lang="en"><head>'
+        '<meta charset="utf-8" />'
+        '<title>lpxtool · error</title>'
+        f'<style>{_HTML_STYLE}</style>'
+        '</head><body>'
+        '<h1 class="h-display">'
+        'Could not parse'
+        '<span class="brand-suffix">· <em>lpx</em>·toolkit</span>'
+        '</h1>'
+        f'<p class="h-sub"><span class="path">{_e(str(project_path))}</span></p>'
+        f'<div class="warning">'
+        f'<div class="wt">⚠ parse failure</div>'
+        f'<p>{_e(str(exc))}</p>'
+        f'</div>'
+        '<p class="h-sub" style="margin-top:24px;">'
+        '<a class="rollup-link" href="/">← Library index</a></p>'
         '</body></html>\n'
     )
 
@@ -2952,12 +3033,19 @@ def make_serve_handler(project_provider, *, label: str = ""):
                 projects = project_provider()
                 if 0 <= idx < len(projects):
                     project_path = projects[idx]
-                    lookup = auval_lookup_cached()
-                    info = parse_project(project_path)
-                    payload = json.loads(project_to_json(info, lookup=lookup))
-                    html = render_project_html(
-                        payload, lookup=lookup, project_path=str(project_path)
-                    )
+                    try:
+                        lookup = auval_lookup_cached()
+                        info = parse_project(project_path)
+                        payload = json.loads(project_to_json(info, lookup=lookup))
+                        html = render_project_html(
+                            payload, lookup=lookup, project_path=str(project_path)
+                        )
+                    except (FileNotFoundError, KeyError, ValueError) as exc:
+                        self._send(
+                            500, "text/html",
+                            _render_serve_error(project_path, exc),
+                        )
+                        return
                     self._send(200, "text/html", html)
                     return
                 self._send(404, "text/plain", "project index out of range\n")
@@ -2969,12 +3057,20 @@ def make_serve_handler(project_provider, *, label: str = ""):
                 projects = project_provider()
                 if 0 <= idx < len(projects):
                     project_path = projects[idx]
-                    lookup = auval_lookup_cached()
-                    info = parse_project(project_path)
-                    self._send(
-                        200, "application/json",
-                        project_to_json(info, lookup=lookup),
-                    )
+                    try:
+                        lookup = auval_lookup_cached()
+                        info = parse_project(project_path)
+                        body = project_to_json(info, lookup=lookup)
+                    except (FileNotFoundError, KeyError, ValueError) as exc:
+                        self._send(
+                            500, "application/json",
+                            json.dumps({
+                                "error": str(exc),
+                                "path": str(project_path),
+                            }),
+                        )
+                        return
+                    self._send(200, "application/json", body)
                     return
                 self._send(404, "text/plain", "project index out of range\n")
                 return
@@ -3087,9 +3183,17 @@ def main_rollup_serve(paths: list[str], port: int = 0) -> int:
     the explicit project list and open the browser at /rollup. Blocks
     until Ctrl-C.
 
-    The legacy stdout-JSON behaviour stays available via `--rollup --json`.
+    Mixed bundles + directories are accepted; directories are expanded
+    to their `.logicx` children via `_expand_rollup_paths`. The legacy
+    stdout-JSON behaviour stays available via `--rollup --json`.
     """
-    bundles = [Path(p).expanduser() for p in paths]
+    bundles = _expand_rollup_paths(paths)
+    if not bundles:
+        print(
+            "--rollup: no .logicx bundles found in the supplied paths",
+            file=sys.stderr,
+        )
+        return 2
     httpd, actual_port = start_serve_for_projects(
         bundles, port=port, open_browser=True, landing_path="/rollup",
     )

@@ -249,6 +249,72 @@ def test_cli_accepts_serve_with_port():
 
 # --- --rollup serves an HTML view by default ---
 
+def test_expand_rollup_paths_expands_directories(tmp_path):
+    """`lpxtool --rollup ~/Music/Logic` (a directory) should be treated
+    as `lpxtool --rollup ~/Music/Logic/*.logicx` — auto-glob the children."""
+    from lpx_inspect import _expand_rollup_paths
+    _make_minimal_bundle(tmp_path, "alpha")
+    _make_minimal_bundle(tmp_path, "beta")
+    out = _expand_rollup_paths([str(tmp_path)])
+    assert {p.stem for p in out} == {"alpha", "beta"}
+
+
+def test_expand_rollup_paths_keeps_explicit_bundles(tmp_path):
+    from lpx_inspect import _expand_rollup_paths
+    a = _make_minimal_bundle(tmp_path, "alpha")
+    b = _make_minimal_bundle(tmp_path, "beta")
+    out = _expand_rollup_paths([str(a), str(b)])
+    assert {p.stem for p in out} == {"alpha", "beta"}
+
+
+def test_expand_rollup_paths_dedupes(tmp_path):
+    """Mixing a directory and an explicit bundle inside it should not
+    create duplicates."""
+    from lpx_inspect import _expand_rollup_paths
+    a = _make_minimal_bundle(tmp_path, "alpha")
+    out = _expand_rollup_paths([str(tmp_path), str(a)])
+    assert [p.stem for p in out] == ["alpha"]
+
+
+def test_expand_rollup_paths_skips_missing(tmp_path):
+    from lpx_inspect import _expand_rollup_paths
+    out = _expand_rollup_paths([str(tmp_path / "does-not-exist")])
+    assert out == []
+
+
+# --- bad-bundle resilience in the live server ---
+
+def test_parse_project_raises_helpful_error_on_invalid_bundle(tmp_path):
+    """An empty / non-.logicx directory should raise a clean
+    FileNotFoundError, not StopIteration."""
+    from lpx_inspect import parse_project
+    bad = tmp_path / "not-a-project"
+    bad.mkdir()
+    with pytest.raises(FileNotFoundError):
+        parse_project(bad)
+
+
+def test_serve_handles_invalid_bundle_gracefully(tmp_path):
+    """When the project provider yields a non-bundle path (e.g. a stale
+    glob entry), hitting /project/0 or /api/projects/0 must not crash
+    the request handler."""
+    from lpx_inspect import start_serve_for_projects
+    bad = tmp_path / "not-a-project.logicx"  # has the suffix but no contents
+    bad.mkdir()
+    httpd, port = start_serve_for_projects([bad], port=0, open_browser=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _, body = _get(port, "/project/0")
+        assert 500 <= status < 600
+        assert "lpxtool" in body.lower() or "could not" in body.lower() or "error" in body.lower()
+        status, _, _ = _get(port, "/api/projects/0")
+        assert 500 <= status < 600
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_start_serve_for_projects_accepts_explicit_paths(tmp_path):
     """`--rollup` needs the server to accept an explicit project list
     rather than scanning a directory. start_serve_for_projects spins up
