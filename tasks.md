@@ -18,9 +18,9 @@ Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github
 
 ### Active
 
-#### #41 Promotion on forums and Reddit `[user-actioned]`
+#### #41 Promotion on forums and Reddit `[user-actioned, private]`
 
-Tracked as [issue #5](https://github.com/rhydlewis/lpx-toolkit/issues/5). Refined 2026-04-30 after a `/refine` pass that pulled the actual conversation context from the two threads the user had pre-identified.
+Refined 2026-04-30 after a `/refine` pass that pulled the actual conversation context from the two threads the user had pre-identified. Kept here in `tasks.md` (not as a public issue) since marketing strategy + draft copy isn't something to broadcast.
 
 **Sequence (warmest → coldest):**
 
