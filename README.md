@@ -70,6 +70,16 @@ python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --json
 
 The `--json` flag emits a structured payload (project metadata, per-track strip + plugin chain, vendor rollup) for piping into other tools. Schema is versioned via the top-level `schema_version` field (currently `1`).
 
+### Cross-project rollup
+
+Pass `--rollup` followed by multiple `.logicx` paths to aggregate plugin usage across many projects. Answers "which of my installed plugins do I actually use?":
+
+```sh
+python3 lpx_inspect.py --rollup ~/Music/Logic/*.logicx
+```
+
+Output is a JSON payload with per-project summaries plus aggregated `fingerprints` (count of projects each plugin appears in) and `vendors` (total plugin count per manufacturer). Bad projects are skipped with a warning to stderr; the rollup still completes.
+
 ## Tests
 
 The runtime parser is stdlib-only; pytest is a dev-only dep:

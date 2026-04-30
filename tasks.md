@@ -8,12 +8,6 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 ## Pending
 
-### Bet 3 — cross-project use
-
-#### #19 Cross-project rollup `--rollup` `[Bet 3]`
-
-`lpx-inspect ~/Music/Logic/**/*.logicx --rollup` aggregates plugin usage across many projects. Answers "which installed plugins do I actually use?". Depends on JSON output (#17) and cache (#18).
-
 ### Distribution + UX polish
 
 #### #20 Rich HTML dashboard output
@@ -156,6 +150,10 @@ Closed by #17 — `vendors` is a top-level field in the JSON output. Standalone 
 #### #18 Auval cache layer with mtime invalidation ✓
 
 `auval_lookup_cached()` reads/writes `~/.cache/lpx-toolkit/auval.json`. Invalidates when `/Library/Audio/Plug-Ins/Components/` mtime advances. `main()` uses this in place of `auval_lookup()`. 8 tests in `tests/test_auval_cache.py` covering: round-trip, missing/corrupt cache, fresh-cache hit, mtime-stale refresh, cold start, auval-unavailable degradation, and the default cache path location (outside the project bundle so the read-only contract is preserved).
+
+#### #19 Cross-project rollup `--rollup` ✓
+
+`rollup_projects()` parses each path (skipping bad ones with a stderr warning), reuses `project_to_json()` per project, and `aggregate_rollup()` produces the final shape: per-project summaries, fingerprints (count of projects each plugin appears in), vendors (manufacturer 4CC → total plugin count). CLI: `--rollup` flag followed by N `.logicx` paths. Verified on the Logic test projects — `EZkeys 2` correctly identified as appearing in 2 of 3 sampled projects. 4 tests in `tests/test_rollup.py`.
 
 #### #28 Strict region→strip bridge ✓ (audio strip mapping)
 

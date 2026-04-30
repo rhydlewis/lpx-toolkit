@@ -1138,6 +1138,67 @@ def project_to_json(info: ProjectInfo, lookup: dict[str, str]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
+def aggregate_rollup(project_jsons: list[dict]) -> dict:
+    """Aggregate per-project JSON payloads into a cross-project rollup.
+
+    Returns a dict with:
+      projects: per-project summaries (name + plugin counts)
+      fingerprints: count of distinct fingerprints across all projects
+      vendors: count of plugins per manufacturer 4CC across all projects
+    """
+    fp_counts: Counter[str] = Counter()
+    vendor_counts: Counter[str] = Counter()
+    project_summaries: list[dict] = []
+
+    for payload in project_jsons:
+        proj = payload.get("project", {})
+        tracks = payload.get("tracks", [])
+        per_proj_fps: set[str] = set()
+        plugin_count = 0
+        for track in tracks:
+            for au in [track.get("instrument")] + track.get("midi_fx", []) + track.get("audio_fx", []):
+                if au is None:
+                    continue
+                fp = au.get("fingerprint")
+                if fp:
+                    per_proj_fps.add(fp)
+                    plugin_count += 1
+        # Each project counts each fingerprint once toward fingerprints rollup
+        for fp in per_proj_fps:
+            fp_counts[fp] += 1
+        # Vendor counts add through directly
+        for vendor, count in payload.get("vendors", {}).items():
+            vendor_counts[vendor] += count
+        project_summaries.append({
+            "name": proj.get("name"),
+            "plugin_count": plugin_count,
+            "unique_fingerprints": len(per_proj_fps),
+        })
+
+    return {
+        "projects": project_summaries,
+        "fingerprints": dict(fp_counts),
+        "vendors": dict(vendor_counts),
+    }
+
+
+def rollup_projects(paths: list[Path], lookup: dict[str, str]) -> dict:
+    """Parse each project, build the cross-project rollup.
+
+    Bad projects (missing Alternatives, corrupt MetaData) are skipped with
+    a warning to stderr — the rollup still completes.
+    """
+    payloads = []
+    for path in paths:
+        try:
+            info = parse_project(Path(path))
+            payloads.append(json.loads(project_to_json(info, lookup)))
+        except (StopIteration, FileNotFoundError, KeyError, ValueError) as exc:
+            print(f"[rollup] skipped {path}: {exc}", file=sys.stderr)
+            continue
+    return aggregate_rollup(payloads)
+
+
 def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
     alt = next(Path(path).glob("Alternatives/*"))
     raw = (alt / "ProjectData").read_bytes()
@@ -1206,9 +1267,21 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
         summarise_bplists(extract_bplists(raw))
 
 
+def main_rollup(paths: list[str]) -> None:
+    """Cross-project rollup mode — emits aggregated JSON."""
+    lookup = auval_lookup_cached()
+    bundle_paths = [Path(p) for p in paths]
+    result = rollup_projects(bundle_paths, lookup)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
-    dump = "--bplists" in args
-    as_json = "--json" in args
-    args = [a for a in args if a not in ("--bplists", "--json")]
-    main(args[0], dump_bplists=dump, as_json=as_json)
+    if "--rollup" in args:
+        args = [a for a in args if a != "--rollup"]
+        main_rollup(args)
+    else:
+        dump = "--bplists" in args
+        as_json = "--json" in args
+        args = [a for a in args if a not in ("--bplists", "--json")]
+        main(args[0], dump_bplists=dump, as_json=as_json)
