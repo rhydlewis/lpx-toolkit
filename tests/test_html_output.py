@@ -460,3 +460,38 @@ def test_render_html_works_without_lookup_or_path(tmp_path):
     payload = json.loads(project_to_json(info, lookup={}))
     out = render_project_html(payload)
     assert "</html>" in out
+
+
+# --- #40 light/dark theme toggle ---
+
+def test_render_includes_theme_toggle_button(tmp_path):
+    """Dashboard ships a theme toggle the user can click."""
+    out = _render(tmp_path)
+    assert 'id="theme-toggle"' in out
+
+
+def test_render_defines_light_palette(tmp_path):
+    """Light mode is implemented by overriding palette variables on
+    `:root[data-theme="light"]` — the toggle just flips the attribute."""
+    out = _render(tmp_path)
+    assert '[data-theme="light"]' in out
+
+
+def test_render_persists_theme_in_localstorage(tmp_path):
+    """Theme choice survives reloads via localStorage."""
+    out = _render(tmp_path)
+    assert "localStorage" in out
+    assert "lpxtool-theme" in out
+
+
+def test_render_applies_persisted_theme_before_body(tmp_path):
+    """Persisted theme is applied as early as possible to avoid a
+    flash-of-wrong-theme on load — the boot script must run before
+    the body renders."""
+    out = _render(tmp_path)
+    head_end = out.find("</head>")
+    body_start = out.find("<body")
+    assert head_end != -1 and body_start != -1
+    head_block = out[:head_end]
+    assert "lpxtool-theme" in head_block
+    assert "data-theme" in head_block

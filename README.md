@@ -5,6 +5,8 @@ Inspect a Logic Pro project from the command line — see every plugin, track, a
 > [!WARNING]
 > **Use at your own risk.** `lpx-toolkit` parses an undocumented binary format that Apple may change at any time. It is strictly read-only — there is a SHA-256 invariant test that fails the build if any byte of a project is ever modified — but you are still pointing it at irreplaceable creative work. Always keep backups. The author accepts no liability for project corruption, data loss, or anything else that might go wrong.
 
+![lpx-toolkit HTML dashboard](lpxtool.png)
+
 ```
 $ lpxtool ~/Music/Logic/piano.logicx
 

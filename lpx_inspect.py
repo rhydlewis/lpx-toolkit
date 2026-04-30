@@ -1132,6 +1132,33 @@ _HTML_STYLE = """
   --warn: #ff5d55; --warn-d: #8a2520;
   --violet: #b69cff;
 }
+:root[data-theme="light"] {
+  --ink: #fbf7ec; --ink-2: #f3ecdb; --ink-3: #e9e0c8; --ink-4: #ddd1b5;
+  --line: #c9bda1; --line-2: #b3a888;
+  --bone: #1a1c20; --bone-dim: #3c4049;
+  --grey: #5e6471; --grey-2: #828896;
+  --amber: #c4571a; --amber-dim: #8f3d10; --copper: #a55224;
+  --phosphor: #1f7d56; --phosphor-d: #145138;
+  --warn: #b8261e; --warn-d: #7a160f;
+  --violet: #6b48d4;
+}
+body, .sheet, .tracks, .fx, .vendor-row .bar, .phantom, .vendor-body {
+  transition: background-color .25s ease, color .25s ease, border-color .25s ease;
+}
+
+.theme-toggle {
+  position: fixed; top: 18px; right: 18px;
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--line-2); background: var(--ink-2);
+  color: var(--bone-dim); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  transition: background-color .15s, color .15s, border-color .15s;
+}
+.theme-toggle:hover {
+  background: var(--ink-3); color: var(--amber); border-color: var(--amber-dim);
+}
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
@@ -1708,11 +1735,34 @@ def render_project_html(
     track_count = p.get("track_count", 0)
     plugin_count = sum(payload.get("vendors", {}).values())
 
+    boot_script = (
+        '<script>(function(){try{'
+        "var t=localStorage.getItem('lpxtool-theme');"
+        "if(t)document.documentElement.setAttribute('data-theme',t);"
+        '}catch(e){}})();</script>'
+    )
+    toggle_button = (
+        '<button id="theme-toggle" class="theme-toggle" type="button" '
+        'aria-label="Toggle light/dark theme" title="Toggle light/dark theme">'
+        '◐</button>'
+    )
+    toggle_script = (
+        '<script>(function(){'
+        "var b=document.getElementById('theme-toggle');if(!b)return;"
+        "b.addEventListener('click',function(){"
+        'var r=document.documentElement;'
+        "var next=r.getAttribute('data-theme')==='light'?'dark':'light';"
+        "r.setAttribute('data-theme',next);"
+        "try{localStorage.setItem('lpxtool-theme',next);}catch(e){}"
+        '});})();</script>'
+    )
+
     return (
         f'<!doctype html>\n<html lang="en"><head>'
         f'<meta charset="utf-8" />'
         f'<meta name="viewport" content="width=device-width, initial-scale=1" />'
         f'<title>lpx-toolkit · {_e(project_name)}</title>'
+        f'{boot_script}'
         f'<link rel="preconnect" href="https://fonts.googleapis.com" />'
         f'<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />'
         f'<link href="https://fonts.googleapis.com/css2?'
@@ -1721,6 +1771,7 @@ def render_project_html(
         f'display=swap" rel="stylesheet" />'
         f'<style>{_HTML_STYLE}</style>'
         f'</head><body>'
+        f'{toggle_button}'
         f'<h1 class="h-display"><em>lpx</em>·toolkit</h1>'
         f'<p class="h-sub">'
         f'{_e(project_name)} · {track_count} tracks · {plugin_count} plug-ins'
@@ -1739,6 +1790,7 @@ def render_project_html(
         f'</section>'
         f'</div>'
         f'<footer class="footer">lpx-toolkit · read-only</footer>'
+        f'{toggle_script}'
         f'</body></html>\n'
     )
 

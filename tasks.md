@@ -8,21 +8,29 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 ## Pending
 
-### Distribution + UX polish
+Priority order (set 2026-04-30 after repo went public):
+
+1. #37 `--serve` mode (local HTTP browse + rollup)
+2. #21 PyPI release, then Homebrew tap
+3. #38 GitHub Actions CI (pytest on push/PR)
+
+Everything below the priority list is **deferred** — needs new evidence or strategic shift to reopen.
+
+### Active
 
 #### #37 Add --serve mode (local HTTP server for browsing + rollup)
 
-`lpx-inspect --serve [DIR]` spins up a local HTTP server (stdlib `http.server`) on a free port and opens the browser. Provides: (1) Index page listing `.logicx` projects in DIR (default `~/Music/Logic`); (2) Per-project view reusing `render_project_html`; (3) Cross-project rollup with click-through to individual projects; (4) JSON API endpoints for tooling. Static `--html` mode stays as default for ship-and-share use cases. macOS-only. Best moment to introduce: when we ship the rollup HTML view (currently a follow-up to #20).
-
-
-
-`--html` flag emits self-contained HTML using `inspector-mockup.html` as the design reference. Consumes the same internal model as JSON to avoid drift. Defer until Bets 1+2 land.
+`lpxtool --serve [DIR]` spins up a local HTTP server (stdlib `http.server`) on a free port and opens the browser. Provides: (1) index page listing `.logicx` projects in DIR (default `~/Music/Logic`); (2) per-project view reusing `render_project_html`; (3) cross-project rollup with click-through to individual projects; (4) JSON API endpoints for tooling. Static `--html` stays as the default for ship-and-share use cases. macOS-only. This is the headline "browse my whole Logic library" feature.
 
 #### #21 Homebrew tap + PyPI packaging
 
-Package as installable CLI: `pyproject.toml` `[project.scripts]` entry point, PyPI release workflow, then a Homebrew tap formula. PM identifies Homebrew as "strongest distribution play within the Logic community."
+Package as installable CLI for distribution. Now that the repo is public, the immediate win is PyPI: once published, the README's headline install becomes `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Steps: confirm `pyproject.toml` is publish-ready (name, version, classifiers ✓ already), build with `python -m build`, upload via `twine` to TestPyPI first, then real PyPI. Homebrew tap is a follow-up — the formula just needs a `pip install` shim around the PyPI release.
 
-### Feature additions
+#### #38 GitHub Actions CI (pytest on push/PR)
+
+Add `.github/workflows/test.yml` running `pytest` against `python-3.10` / `3.11` / `3.12` on `macos-latest`. Should run on `push` to main and on every PR. Cheap to set up, signals "maintained" to anyone landing on the repo, and protects against regressions when contributors arrive. Uses the existing `requirements-dev.txt`. No fixture project in the repo, so the integration tests stay env-gated and naturally skip in CI.
+
+### Deferred (need new evidence to reopen)
 
 #### #27 Detect summing/folder tracks (track groups) `[deferred 2026-04-30]`
 
@@ -37,19 +45,13 @@ Investigation summary:
 
 **To resolve**: 2-3 sessions of OCuA channel-strip reverse-engineering. Each child track's output routes to the parent Sub's strip; that field is in the OCuA descriptor (24KB+ records, only a handful of fields decoded so far). The user-facing JTBD doesn't currently demand it, so deferred.
 
-
-
-Logic's Track Stacks (summing stacks, folder stacks) group child tracks under a parent. Extract the parent→child relationships and surface them in the tracks output (indent or grouped row). Format reverse-engineering needed.
-
-### Reverse-engineering follow-ups (deferred — need new evidence)
-
 #### #28 Strict region→strip bridge `[partially solved 2026-04-30]`
 
-**Audio strip mapping is solved.** Each registry record's post-name `uint16 LE` holds the channel-strip number for audio tracks. Wired up as `TrackEvidence.strip_id` / `RegionCluster.strip_id`. 100% accuracy on the 31 audio tracks in the busy-living test project (Andy & Red→1, Audio 3→3, Slide GTR→19, Audio 27→27, etc.).
+**Audio strip mapping is solved.** Each registry record's post-name `uint16 LE` holds the channel-strip number for audio tracks. Wired up as `TrackEvidence.strip_id` / `RegionCluster.strip_id`. 100% accuracy on the 31 audio tracks in the busy-living test project.
 
 **Per-track ID also solved**: each registry record is preceded by a 64-byte preamble carrying a uint16 LE track ID at bytes 2-3. Now exposed as `TrackEvidence.track_id`.
 
-**Still open**: linking *region* records (`gRuA`) to their parent track. The strip number lives on the registry record, not the region — so for projects where the region count matters per channel strip we'd still need a region→registry bridge. The original deferred work for region UUID lookups remains.
+**Still open**: linking *region* records (`gRuA`) to their parent track. The strip number lives on the registry record, not the region — so for projects where the region count matters per channel strip we'd still need a region→registry bridge.
 
 #### #31 Find hidden-track flag `[deferred]`
 
@@ -196,6 +198,14 @@ Audio-track registry records encode the channel-strip number in the post-name `u
 #### #28b Per-track ID extraction ✓ (new finding 2026-04-30)
 
 Each registry record has a 64-byte preamble whose bytes 2-3 are a uint16 LE per-track ID. Exposed as `TrackEvidence.track_id` / `RegionCluster.track_id`. Stable, globally unique within a project. Track-list output now sorts by this ID for stable ordering close to UI order (but not exactly).
+
+#### #39 Add lpxtool.png screenshot to README ✓
+
+Embedded the existing `lpxtool.png` in the README directly under the warning callout, so a visitor sees the HTML dashboard before the text-mode sample output. Relative path renders on GitHub.
+
+#### #40 Light/dark mode toggle for HTML dashboard ✓
+
+`_HTML_STYLE` now defines a light palette under `:root[data-theme="light"]` (warm-paper background, dark ink, slightly darker accents to hold contrast). `render_project_html()` adds: (a) inline boot script in `<head>` that reads `localStorage["lpxtool-theme"]` and applies the attribute before body paint (no flash); (b) fixed top-right toggle button (◐) that flips the attribute and persists the choice. Smooth colour transitions on body/sheet/track surfaces. 4 new tests in `tests/test_html_output.py` lock the toggle markup, light-palette presence, localStorage persistence, and head-block boot order.
 
 #### #35 Distinguish Folder Stack / Summing Stack / Aux Stack ✓
 
