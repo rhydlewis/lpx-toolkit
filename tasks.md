@@ -10,9 +10,9 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 Priority order (set 2026-04-30 after repo went public):
 
-1. #21 PyPI release, then Homebrew tap
-2. #38 GitHub Actions CI (pytest on push/PR)
-3. #41 Promotion on forums and Reddit
+1. #21 PyPI release ✓ — Homebrew tap pending
+2. #38 GitHub Actions CI ✓
+3. #41 Promotion on forums and Reddit (user-actioned)
 
 Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github.com/rhydlewis/lpx-toolkit/issues/1)–[#4](https://github.com/rhydlewis/lpx-toolkit/issues/4).
 
@@ -30,10 +30,6 @@ Package as installable CLI for distribution.
 README's headline install: `uvx lpx-toolkit ~/Music/Logic/foo.logicx`.
 
 **Homebrew tap — pending.** Create a `homebrew-rhydlewis` (or similar) repo on GitHub with a `lpxtool.rb` formula that wraps `pip install lpx-toolkit==0.1.0`. Then `brew install rhydlewis/rhydlewis/lpxtool` becomes a third install path for Mac users who prefer Homebrew.
-
-#### #38 GitHub Actions CI (pytest on push/PR)
-
-Add `.github/workflows/test.yml` running `pytest` against `python-3.10` / `3.11` / `3.12` / `3.13` on `macos-latest`. Should run on `push` to main and on every PR. Cheap to set up, signals "maintained" to anyone landing on the repo, and protects against regressions when contributors arrive. Uses the existing `requirements-dev.txt`. No fixture project in the repo, so the integration tests stay env-gated and naturally skip in CI.
 
 #### #41 Promotion on forums and Reddit `[user-actioned]`
 
@@ -245,6 +241,10 @@ Embedded the existing `lpxtool.png` in the README directly under the warning cal
 #### #40 Light/dark mode toggle for HTML dashboard ✓
 
 `_HTML_STYLE` now defines a light palette under `:root[data-theme="light"]` (warm-paper background, dark ink, slightly darker accents to hold contrast). `render_project_html()` adds: (a) inline boot script in `<head>` that reads `localStorage["lpxtool-theme"]` and applies the attribute before body paint (no flash); (b) fixed top-right toggle button (◐) that flips the attribute and persists the choice. Smooth colour transitions on body/sheet/track surfaces. 4 new tests in `tests/test_html_output.py` lock the toggle markup, light-palette presence, localStorage persistence, and head-block boot order.
+
+#### #38 GitHub Actions CI (pytest on push/PR) ✓
+
+`.github/workflows/test.yml` runs `pytest` on every push to main and every PR against Python 3.10 / 3.11 / 3.12 / 3.13 on `macos-latest`. README carries a tests-status badge. CI caught a real Python 3.10/3.11 incompatibility (f-string with `\"` inside an expression — only legal from 3.12 per PEP 701) on its first run, fixed in a follow-up commit. All four matrix jobs green.
 
 #### #35 Distinguish Folder Stack / Summing Stack / Aux Stack ✓
 
