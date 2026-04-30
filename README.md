@@ -44,28 +44,26 @@ Tracks:         3
 
 ## Install
 
-The easiest route is [`uv`](https://docs.astral.sh/uv/) — no clone, no venv, no install. If you have `uv`, you can run `lpxtool` straight from GitHub:
+The easiest route is [`uv`](https://docs.astral.sh/uv/) — no clone, no venv, no install:
 
 ```sh
-uvx --from git+https://github.com/rhydlewis/lpx-toolkit lpxtool ~/Music/Logic/SomeProject.logicx
+uvx lpx-toolkit ~/Music/Logic/SomeProject.logicx
 ```
 
-`uvx` builds an isolated environment on first run and caches it; subsequent runs are instant. This is the Python equivalent of `npx`.
+`uvx` fetches the package from PyPI on first run and caches it; subsequent runs are instant. This is the Python equivalent of `npx`.
 
 Prefer a permanent install? Use [`pipx`](https://pipx.pypa.io/):
 
 ```sh
-pipx install git+https://github.com/rhydlewis/lpx-toolkit
+pipx install lpx-toolkit
 lpxtool ~/Music/Logic/SomeProject.logicx
 ```
 
-Or clone and install into a virtual environment:
+Or with plain `pip` in a virtual environment:
 
 ```sh
-git clone https://github.com/rhydlewis/lpx-toolkit.git
-cd lpx-toolkit
 python3 -m venv .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install lpx-toolkit
 .venv/bin/lpxtool ~/Music/Logic/SomeProject.logicx
 ```
 

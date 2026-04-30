@@ -18,9 +18,13 @@ Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github
 
 ### Active
 
-#### #21 Homebrew tap + PyPI packaging
+#### #21 Homebrew tap + PyPI packaging `[PyPI ✓ 2026-04-30 — Homebrew tap pending]`
 
-Package as installable CLI for distribution. Now that the repo is public, the immediate win is PyPI: once published, the README's headline install becomes `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Steps: confirm `pyproject.toml` is publish-ready, build with `python -m build`, upload via `twine` to TestPyPI first, then real PyPI. Homebrew tap is a follow-up — the formula just needs a `pip install` shim around the PyPI release.
+Package as installable CLI for distribution.
+
+**PyPI — done 2026-04-30.** `lpx-toolkit 0.1.0` is live at https://pypi.org/project/lpx-toolkit/0.1.0/. README's headline install is now `uvx lpx-toolkit ~/Music/Logic/foo.logicx` (no `--from`). Smoke-tested end-to-end: TestPyPI → fresh-venv install → real-project parse, then real PyPI → `uvx --refresh --from lpx-toolkit lpxtool --version` → `lpx-inspect 0.1.0`. Release workflow documented in CONTRIBUTING.md.
+
+**Homebrew tap — pending.** Create a `homebrew-rhydlewis` (or similar) repo on GitHub with a `lpxtool.rb` formula that wraps `pip install lpx-toolkit==0.1.0`. Then `brew install rhydlewis/rhydlewis/lpxtool` becomes a third install path for Mac users who prefer Homebrew.
 
 #### #38 GitHub Actions CI (pytest on push/PR)
 
