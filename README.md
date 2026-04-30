@@ -59,6 +59,13 @@ pipx install lpx-toolkit
 lpxtool ~/Music/Logic/SomeProject.logicx
 ```
 
+Or via [Homebrew](https://brew.sh) for a system-wide install:
+
+```sh
+brew install rhydlewis/tap/lpxtool
+lpxtool ~/Music/Logic/SomeProject.logicx
+```
+
 Or with plain `pip` in a virtual environment:
 
 ```sh

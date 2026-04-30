@@ -10,26 +10,13 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 Priority order (set 2026-04-30 after repo went public):
 
-1. #21 PyPI release ✓ — Homebrew tap pending
+1. #21 PyPI release ✓ + Homebrew tap ✓
 2. #38 GitHub Actions CI ✓
-3. #41 Promotion on forums and Reddit (user-actioned)
+3. #41 Promotion on forums and Reddit (user-actioned) — only remaining active task
 
 Reverse-engineering puzzles tracked as GitHub issues — see [#1](https://github.com/rhydlewis/lpx-toolkit/issues/1)–[#4](https://github.com/rhydlewis/lpx-toolkit/issues/4).
 
 ### Active
-
-#### #21 Homebrew tap + PyPI packaging `[PyPI ✓ 2026-04-30 — Homebrew tap pending]`
-
-Package as installable CLI for distribution.
-
-**PyPI — done 2026-04-30.** `lpx-toolkit` is live at https://pypi.org/project/lpx-toolkit/. Release workflow documented in CONTRIBUTING.md.
-
-- `0.1.0` debut: published end-to-end via TestPyPI smoke + real PyPI.
-- `0.1.1` fix: shipped same day after a user reported `uvx lpx-toolkit` failed because the package only declared the `lpxtool` console script. Added `lpx-toolkit = "lpx_inspect:cli"` as a second entry point so the package name and the executable match. Both names work; `lpxtool` stays as the shorter alias.
-
-README's headline install: `uvx lpx-toolkit ~/Music/Logic/foo.logicx`.
-
-**Homebrew tap — pending.** Create a `homebrew-rhydlewis` (or similar) repo on GitHub with a `lpxtool.rb` formula that wraps `pip install lpx-toolkit==0.1.0`. Then `brew install rhydlewis/rhydlewis/lpxtool` becomes a third install path for Mac users who prefer Homebrew.
 
 #### #41 Promotion on forums and Reddit `[user-actioned]`
 
@@ -241,6 +228,17 @@ Embedded the existing `lpxtool.png` in the README directly under the warning cal
 #### #40 Light/dark mode toggle for HTML dashboard ✓
 
 `_HTML_STYLE` now defines a light palette under `:root[data-theme="light"]` (warm-paper background, dark ink, slightly darker accents to hold contrast). `render_project_html()` adds: (a) inline boot script in `<head>` that reads `localStorage["lpxtool-theme"]` and applies the attribute before body paint (no flash); (b) fixed top-right toggle button (◐) that flips the attribute and persists the choice. Smooth colour transitions on body/sheet/track surfaces. 4 new tests in `tests/test_html_output.py` lock the toggle markup, light-palette presence, localStorage persistence, and head-block boot order.
+
+#### #21 Homebrew tap + PyPI packaging ✓
+
+**PyPI** (live at https://pypi.org/project/lpx-toolkit/). Three releases shipped in one day:
+- `0.1.0` — debut release
+- `0.1.1` — added `lpx-toolkit` console script alongside `lpxtool` so `uvx lpx-toolkit ...` resolves without `--from`
+- `0.1.2` — friendly errors for non-bundle paths (`uvx lpx-toolkit .` from inside `~/Music/Logic` was crashing with StopIteration; now suggests `--rollup`)
+
+**Homebrew tap** (live at https://github.com/rhydlewis/homebrew-tap). `Formula/lpxtool.rb` wraps the PyPI sdist via `Language::Python::Virtualenv` and ships both `lpx-toolkit` and `lpxtool` console scripts. Verified end-to-end: `brew install rhydlewis/tap/lpxtool` → both binaries on PATH → real-project parse from a brew-installed wheel. README's install section now shows uvx (primary), pipx, brew, and pip-in-venv.
+
+Bumping the formula on each PyPI release: edit `url` + `sha256` in `Formula/lpxtool.rb`. The README in `homebrew-tap` documents the one-liner that pulls them from PyPI's JSON API.
 
 #### #38 GitHub Actions CI (pytest on push/PR) ✓
 
