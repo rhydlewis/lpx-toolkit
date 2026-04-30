@@ -1299,6 +1299,100 @@ body {
   font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
   color: var(--grey);
 }
+
+/* Vendor drill-down (expandable rows) */
+details.vendor-expandable { display: block; padding: 0; }
+details.vendor-expandable summary {
+  display: grid; grid-template-columns: 1fr auto auto;
+  align-items: center; gap: 10px; padding: 7px 14px;
+  font-size: 12px; cursor: pointer; list-style: none;
+  border-bottom: 1px dashed var(--line);
+}
+details.vendor-expandable summary::-webkit-details-marker { display: none; }
+details.vendor-expandable summary::before {
+  content: "▸"; color: var(--grey-2); margin-right: 6px;
+  display: inline-block; transition: transform .15s;
+}
+details[open].vendor-expandable summary::before { transform: rotate(90deg); }
+details.vendor-expandable .name { color: var(--bone-dim); }
+details.vendor-expandable .bar {
+  width: 90px; height: 6px; background: var(--ink-3);
+  border: 1px solid var(--line); position: relative;
+}
+details.vendor-expandable .bar::after {
+  content: ""; position: absolute; inset: 0; width: var(--w, 30%);
+  background: linear-gradient(90deg, var(--amber), var(--copper));
+}
+details.vendor-expandable .count {
+  font-variant-numeric: tabular-nums; color: var(--bone);
+  width: 24px; text-align: right;
+}
+.vendor-body { padding: 8px 14px 12px; background: var(--ink-3); }
+.vendor-section { margin-top: 6px; }
+.vendor-section-title {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .22em;
+  color: var(--grey); margin: 8px 0 6px;
+}
+.vendor-plugin {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; padding: 3px 0;
+  color: var(--bone);
+}
+.vendor-plugin .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+}
+.vendor-plugin.used .dot { background: var(--phosphor); }
+.vendor-plugin.unused .dot { background: var(--grey-2); }
+.vendor-plugin.unused { color: var(--grey); }
+.vendor-plugin .vc-meta { color: var(--grey); font-size: 10px; }
+.vendor-empty { color: var(--grey); font-style: italic; padding: 4px 0; }
+
+/* Open-in-Logic button */
+.open-bar {
+  display: flex; align-items: center; gap: 12px;
+  margin: 0 0 24px; flex-wrap: wrap;
+}
+.open-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: inherit; font-size: 11px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--ink); background: var(--amber);
+  border: 1px solid var(--amber); padding: 8px 14px;
+  cursor: pointer; transition: background .15s;
+}
+.open-btn:hover { background: var(--bone); border-color: var(--bone); }
+.open-btn:disabled { opacity: .6; cursor: default; }
+.open-bar a.path-link {
+  color: var(--grey); font-size: 11px; text-decoration: none;
+  border-bottom: 1px dashed var(--grey-2);
+}
+.open-bar a.path-link:hover { color: var(--bone-dim); }
+.open-toast {
+  font-size: 11px; color: var(--phosphor);
+  letter-spacing: .12em; text-transform: uppercase;
+  opacity: 0; transition: opacity .2s;
+}
+.open-toast.show { opacity: 1; }
+"""
+
+
+_OPEN_BTN_JS = r"""
+(function () {
+  const btn = document.querySelector('.open-btn');
+  const toast = document.querySelector('.open-toast');
+  if (!btn || !toast) return;
+  btn.addEventListener('click', async function () {
+    const cmd = btn.getAttribute('data-cmd') || '';
+    try {
+      await navigator.clipboard.writeText(cmd);
+      toast.textContent = '✓ Copied — paste in Terminal';
+      toast.classList.add('show');
+      setTimeout(function () { toast.classList.remove('show'); }, 3000);
+    } catch (err) {
+      toast.textContent = 'Clipboard blocked — use the path link →';
+      toast.classList.add('show');
+    }
+  });
+})();
 """
 
 
@@ -1403,20 +1497,119 @@ def _render_tracks_table(tracks: list[dict]) -> str:
     return "".join(parts)
 
 
-def _render_vendor_rollup(vendors: dict) -> str:
+def _vendor_used_fingerprints(payload: dict) -> dict[str, set[str]]:
+    """Manufacturer 4CC → set of fingerprints used (in this project)."""
+    out: dict[str, set[str]] = {}
+    for track in payload.get("tracks", []):
+        for au in [track.get("instrument")] + track.get("midi_fx", []) + track.get("audio_fx", []):
+            if au is None:
+                continue
+            mfr = au.get("manufacturer")
+            fp = au.get("fingerprint")
+            if mfr and fp:
+                out.setdefault(mfr, set()).add(fp)
+    return out
+
+
+def _vendor_track_counts(payload: dict) -> dict[str, int]:
+    """Fingerprint → number of tracks it appears on (instrument or any FX slot)."""
+    counts: Counter[str] = Counter()
+    for track in payload.get("tracks", []):
+        seen_in_track: set[str] = set()
+        for au in [track.get("instrument")] + track.get("midi_fx", []) + track.get("audio_fx", []):
+            if au is None:
+                continue
+            fp = au.get("fingerprint")
+            if fp:
+                seen_in_track.add(fp)
+        for fp in seen_in_track:
+            counts[fp] += 1
+    return dict(counts)
+
+
+def _render_vendor_drilldown(
+    vendor: str,
+    used_fps: set[str],
+    track_counts: dict[str, int],
+    lookup: dict[str, str],
+) -> str:
+    """The expanded body of a vendor row: used + unused plugins from that
+    manufacturer, sourced from the auval lookup table."""
+    # All known plugins for this vendor from auval
+    vendor_fps = {fp: name for fp, name in lookup.items() if fp.endswith(f"/{vendor}")}
+    used = sorted(used_fps & vendor_fps.keys())
+    unused = sorted(vendor_fps.keys() - used_fps)
+
+    parts: list[str] = []
+    if used:
+        parts.append('<div class="vendor-section"><div class="vendor-section-title">Used on this project</div>')
+        for fp in used:
+            label = vendor_fps[fp].split(": ", 1)[-1]
+            count = track_counts.get(fp, 0)
+            count_str = f" — {count} track{'s' if count != 1 else ''}" if count else ""
+            parts.append(
+                f'<div class="vendor-plugin used">'
+                f'<span class="dot used"></span>{_e(label)}'
+                f'<span class="vc-meta">{_e(count_str)}</span>'
+                f'</div>'
+            )
+        parts.append("</div>")
+    # Even when nothing is used here, we still want to show what's installed
+    # — but only if there are unused entries to show.
+    if unused:
+        parts.append('<div class="vendor-section"><div class="vendor-section-title">Installed but unused here</div>')
+        for fp in unused:
+            label = vendor_fps[fp].split(": ", 1)[-1]
+            parts.append(
+                f'<div class="vendor-plugin unused">'
+                f'<span class="dot unused"></span>{_e(label)}'
+                f'</div>'
+            )
+        parts.append("</div>")
+    if not parts:
+        # Nothing in lookup for this vendor — show a hint instead of blank
+        parts.append('<div class="vendor-section vendor-empty">'
+                     '<em>No installed plug-ins from this vendor in your AU registry.</em>'
+                     '</div>')
+    return "".join(parts)
+
+
+def _render_vendor_rollup(
+    vendors: dict,
+    payload: dict | None = None,
+    lookup: dict[str, str] | None = None,
+) -> str:
     if not vendors:
         return ""
+    used_by_vendor = _vendor_used_fingerprints(payload or {})
+    track_counts = _vendor_track_counts(payload or {})
+    has_lookup = bool(lookup)
     max_count = max(vendors.values()) or 1
     parts = ['<div class="sheet">']
     for vendor, count in sorted(vendors.items(), key=lambda x: -x[1]):
         pct = (count / max_count) * 100
-        parts.append(
-            f'<div class="vendor-row">'
-            f'<div class="name">{_e(vendor)}</div>'
-            f'<div class="bar" style="--w:{pct:.0f}%"></div>'
-            f'<div class="count">{count}</div>'
-            f'</div>'
-        )
+        if has_lookup:
+            drilldown = _render_vendor_drilldown(
+                vendor, used_by_vendor.get(vendor, set()), track_counts, lookup,
+            )
+            parts.append(
+                f'<details class="vendor-row vendor-expandable">'
+                f'<summary>'
+                f'<div class="name">{_e(vendor)}</div>'
+                f'<div class="bar" style="--w:{pct:.0f}%"></div>'
+                f'<div class="count">{count}</div>'
+                f'</summary>'
+                f'<div class="vendor-body">{drilldown}</div>'
+                f'</details>'
+            )
+        else:
+            parts.append(
+                f'<div class="vendor-row">'
+                f'<div class="name">{_e(vendor)}</div>'
+                f'<div class="bar" style="--w:{pct:.0f}%"></div>'
+                f'<div class="count">{count}</div>'
+                f'</div>'
+            )
     parts.append("</div>")
     return "".join(parts)
 
@@ -1476,17 +1669,52 @@ def _render_diagnostics(warnings: list[dict]) -> str:
     return "".join(parts)
 
 
-def render_project_html(payload: dict) -> str:
+def _render_open_bar(project_path: str | None) -> str:
+    """Header row with an Open-in-Logic button (clipboard JS) + Finder
+    fallback link. Empty when no path is supplied."""
+    if not project_path:
+        return ""
+    cmd = f'open -a "Logic Pro" "{project_path}"'
+    file_url = f"file://{project_path}"
+    return (
+        f'<div class="open-bar">'
+        f'<button class="open-btn" data-cmd="{_e(cmd)}" type="button">'
+        f'Open in Logic'
+        f'</button>'
+        f'<a class="path-link" href="{_e(file_url)}">Reveal in Finder</a>'
+        f'<span class="open-toast"></span>'
+        f'</div>'
+    )
+
+
+def render_project_html(
+    payload: dict,
+    lookup: dict[str, str] | None = None,
+    project_path: str | None = None,
+) -> str:
     """Render a JSON payload (from `project_to_json`) to a self-contained
-    HTML dashboard styled to match `inspector-mockup.html`."""
+    HTML dashboard styled to match `inspector-mockup.html`.
+
+    Optional `lookup` (auval table) enables the vendor drill-down — each
+    manufacturer row becomes expandable and shows used + unused plugins
+    from that vendor.
+
+    Optional `project_path` adds a header "Open in Logic" button that
+    copies a `open -a "Logic Pro" <path>` shell command to the clipboard.
+    """
     p = payload.get("project", {})
     project_name = p.get("name", "Untitled")
 
     metadata_html = _render_metadata_sheet(p)
     tracks_html = _render_tracks_table(payload.get("tracks", []))
-    vendors_html = _render_vendor_rollup(payload.get("vendors", {}))
+    vendors_html = _render_vendor_rollup(
+        payload.get("vendors", {}),
+        payload=payload,
+        lookup=lookup,
+    )
     phantoms_html = _render_phantoms(payload.get("phantom_plugins", []))
     diagnostics_html = _render_diagnostics(payload.get("diagnostics", []))
+    open_bar_html = _render_open_bar(project_path)
 
     track_count = p.get("track_count", 0)
     plugin_count = sum(payload.get("vendors", {}).values())
@@ -1508,6 +1736,7 @@ def render_project_html(payload: dict) -> str:
         f'<p class="h-sub">'
         f'{_e(project_name)} · {track_count} tracks · {plugin_count} plug-ins'
         f'</p>'
+        f'{open_bar_html}'
         f'<div class="layout">'
         f'<aside>'
         f'<div class="label">Project</div>'
@@ -1521,6 +1750,7 @@ def render_project_html(payload: dict) -> str:
         f'</section>'
         f'</div>'
         f'<footer class="footer">lpx-toolkit · read-only</footer>'
+        f'<script>{_OPEN_BTN_JS}</script>'
         f'</body></html>\n'
     )
 
@@ -1859,7 +2089,12 @@ def main(
     if as_html:
         import tempfile
         payload = json.loads(project_to_json(info, lookup, raw=raw, all_aus=all_aus))
-        html_doc = render_project_html(payload)
+        absolute_path = str(Path(path).resolve())
+        html_doc = render_project_html(
+            payload,
+            lookup=lookup,
+            project_path=absolute_path,
+        )
         # Slug the project name for the tempfile so opens stack readably
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", info.name).strip("-") or "project"
         out_file = Path(tempfile.gettempdir()) / f"lpx-toolkit-{slug}.html"

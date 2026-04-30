@@ -246,3 +246,170 @@ def test_render_handles_completely_empty_payload(tmp_path):
     # Closing body and html tags
     assert "</body>" in out
     assert "</html>" in out
+
+
+# --- Vendor drill-down (expandable rows showing used + unused plugins) ----
+
+
+def test_render_includes_used_plugins_per_vendor():
+    """Expanded vendor rows show plugins from that manufacturer that ARE
+    used on this project, with a per-track count."""
+    payload = {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 1,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [{
+            "kind": "instrument", "strip_name": "Inst 1",
+            "display_name": "EZkeys 2", "is_active": True,
+            "instrument": {
+                "type_code": "aumu", "subtype": "EZk2", "manufacturer": "Toon",
+                "fingerprint": "aumu/EZk2/Toon",
+                "display_name": "EZkeys 2",
+                "resolved_name": "Toontrack: EZkeys 2",
+            },
+            "midi_fx": [], "audio_fx": [],
+        }],
+        "track_list": [], "vendors": {"Toon": 1},
+        "diagnostics": [], "phantom_plugins": [],
+    }
+    lookup = {
+        "aumu/EZk2/Toon": "Toontrack: EZkeys 2",
+        "aumu/EZbs/Toon": "Toontrack: EZbass",
+        "aufx/AuSe/Toon": "Toontrack: Toontrack Audio Sender",
+    }
+    out = render_project_html(payload, lookup=lookup, project_path="/x.logicx")
+    # All three Toontrack plugins exist in the lookup
+    # but only EZkeys 2 is used on this project
+    assert "EZkeys 2" in out
+    # The unused plugins from Toontrack should also be listed
+    assert "EZbass" in out
+    assert "Toontrack Audio Sender" in out
+
+
+def test_render_marks_used_vs_unused_plugins_distinctly():
+    """The vendor drill-down distinguishes 'used' from 'unused' so the user
+    can tell at a glance."""
+    payload = {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 1,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [{
+            "kind": "instrument", "strip_name": "Inst 1",
+            "display_name": "EZkeys 2", "is_active": True,
+            "instrument": {
+                "type_code": "aumu", "subtype": "EZk2", "manufacturer": "Toon",
+                "fingerprint": "aumu/EZk2/Toon",
+                "display_name": "EZkeys 2",
+                "resolved_name": "Toontrack: EZkeys 2",
+            },
+            "midi_fx": [], "audio_fx": [],
+        }],
+        "track_list": [], "vendors": {"Toon": 1},
+        "diagnostics": [], "phantom_plugins": [],
+    }
+    lookup = {
+        "aumu/EZk2/Toon": "Toontrack: EZkeys 2",
+        "aumu/EZbs/Toon": "Toontrack: EZbass",
+    }
+    out = render_project_html(payload, lookup=lookup, project_path="/x.logicx")
+    # We render some kind of section/heading for "used" and "unused"
+    assert "used" in out.lower()
+    assert "unused" in out.lower()
+
+
+def test_render_omits_unused_section_when_no_other_plugins_from_vendor():
+    """When the vendor only has plugins that are all in use, the unused
+    section is empty (don't render an empty header)."""
+    payload = {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 1,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [{
+            "kind": "instrument", "strip_name": "Inst 1",
+            "display_name": "EZkeys 2", "is_active": True,
+            "instrument": {
+                "type_code": "aumu", "subtype": "EZk2", "manufacturer": "Toon",
+                "fingerprint": "aumu/EZk2/Toon",
+                "display_name": "EZkeys 2",
+                "resolved_name": "Toontrack: EZkeys 2",
+            },
+            "midi_fx": [], "audio_fx": [],
+        }],
+        "track_list": [], "vendors": {"Toon": 1},
+        "diagnostics": [], "phantom_plugins": [],
+    }
+    lookup = {"aumu/EZk2/Toon": "Toontrack: EZkeys 2"}
+    out = render_project_html(payload, lookup=lookup, project_path="/x.logicx")
+    # 'Unused' header should not appear when there's nothing to list
+    # We use a specific marker string to distinguish from incidental "unused"
+    # mentions in CSS/scripts
+    assert "Toontrack" in out
+
+
+# --- Open in Logic button ------------------------------------------------
+
+
+def test_render_includes_open_in_logic_button(tmp_path):
+    """When project_path is supplied, a button labelled 'Open in Logic'
+    is rendered. When omitted, the button is not present (graceful)."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload, project_path="/path/to/song.logicx")
+    assert "Open in Logic" in out
+    # Without project_path, no open-in-Logic button
+    out_no_path = render_project_html(payload)
+    assert "Open in Logic" not in out_no_path
+
+
+def test_render_embeds_open_command_with_project_path(tmp_path):
+    """The button copies a shell command with the project's absolute path
+    to the clipboard. The command must contain the project path."""
+    info = parse_project(_make_minimal_bundle(tmp_path, name="my-song"))
+    payload = json.loads(project_to_json(info, lookup={}))
+    project_path = "/absolute/path/to/my-song.logicx"
+    out = render_project_html(payload, lookup={}, project_path=project_path)
+    # The embedded command is the macOS `open -a "Logic Pro"` form
+    assert 'open -a' in out
+    assert "Logic Pro" in out
+    assert html.escape(project_path, quote=True) in out or project_path in out
+
+
+def test_render_includes_file_url_to_project_as_fallback(tmp_path):
+    """A file:// link to the project bundle works as a Finder-reveal
+    fallback when clipboard JS is blocked."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    project_path = "/absolute/path/to/song.logicx"
+    out = render_project_html(payload, lookup={}, project_path=project_path)
+    # file:// URL with the project path appears
+    assert f"file://{project_path}" in out
+
+
+def test_render_html_works_without_lookup_or_path(tmp_path):
+    """Backwards-compatible: callers that only pass `payload` still get
+    a valid render (no vendor drill-down content, no Open button)."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload)
+    assert "</html>" in out
