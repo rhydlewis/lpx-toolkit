@@ -1096,7 +1096,35 @@ def _track_to_dict(track: Track, lookup: dict[str, str]) -> dict:
     }
 
 
-def project_to_json(info: ProjectInfo, lookup: dict[str, str]) -> str:
+def _track_list_to_dicts(clusters: list[RegionCluster]) -> list[dict]:
+    """Serialise registry-derived RegionCluster entries to JSON shape."""
+    return [
+        {
+            "name": c.base_name,
+            "kind": c.kind,
+            "track_id": c.track_id,
+            "strip_id": c.strip_id,
+            "region_count": c.count,
+        }
+        for c in clusters
+    ]
+
+
+def _build_track_list(info: ProjectInfo, raw: bytes) -> list[RegionCluster]:
+    """Run the registry-evidence pipeline against ProjectData bytes."""
+    region_records = [r for r in find_region_records(raw) if r.name != info.name]
+    header_records = [r for r in find_track_header_records(raw) if r.name != info.name]
+    registry_records = [r for r in find_track_registry_records(raw) if r.name != info.name]
+    tracks = tracks_from_evidence(registry_records, header_records, region_records)
+    tracks.sort(key=lambda t: (t.track_id, t.first_offset))
+    return tracks
+
+
+def project_to_json(
+    info: ProjectInfo,
+    lookup: dict[str, str],
+    raw: bytes | None = None,
+) -> str:
     """Serialise project state to a stable JSON wire format.
 
     Schema (version 1):
@@ -1105,6 +1133,10 @@ def project_to_json(info: ProjectInfo, lookup: dict[str, str]) -> str:
                  created_at (ISO), modified_at (ISO) }
       tracks: [ { kind, strip_name, display_name, is_active,
                   instrument, midi_fx, audio_fx } ]
+        — OCuA-derived strips with active plugin chains
+      track_list: [ { name, kind, track_id, strip_id, region_count } ]
+        — registry-derived canonical track list (matches Logic UI count;
+          requires `raw` to be provided)
       vendors: { manufacturer_4cc: plugin_count }
     """
     user_tracks = [t for t in info.tracks if t.is_user_track and t.is_active]
@@ -1120,6 +1152,10 @@ def project_to_json(info: ProjectInfo, lookup: dict[str, str]) -> str:
         for fx in t.audio_fx:
             vendor_counts[fx.manufacturer] += 1
 
+    track_list_dicts: list[dict] = []
+    if raw is not None:
+        track_list_dicts = _track_list_to_dicts(_build_track_list(info, raw))
+
     payload = {
         "schema_version": JSON_SCHEMA_VERSION,
         "project": {
@@ -1133,6 +1169,7 @@ def project_to_json(info: ProjectInfo, lookup: dict[str, str]) -> str:
             "modified_at": info.modified_at.isoformat(),
         },
         "tracks": track_dicts,
+        "track_list": track_list_dicts,
         "vendors": dict(vendor_counts),
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
@@ -1192,7 +1229,9 @@ def rollup_projects(paths: list[Path], lookup: dict[str, str]) -> dict:
     for path in paths:
         try:
             info = parse_project(Path(path))
-            payloads.append(json.loads(project_to_json(info, lookup)))
+            alt = next(Path(path).glob("Alternatives/*"))
+            raw = (alt / "ProjectData").read_bytes()
+            payloads.append(json.loads(project_to_json(info, lookup, raw=raw)))
         except (StopIteration, FileNotFoundError, KeyError, ValueError) as exc:
             print(f"[rollup] skipped {path}: {exc}", file=sys.stderr)
             continue
@@ -1206,7 +1245,7 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
     lookup = auval_lookup_cached()
 
     if as_json:
-        print(project_to_json(info, lookup))
+        print(project_to_json(info, lookup, raw=raw))
         return
 
     fmt_dt = "%Y-%m-%d %H:%M"

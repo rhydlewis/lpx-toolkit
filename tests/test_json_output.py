@@ -95,3 +95,39 @@ def test_project_to_json_vendors_is_a_dict_keyed_by_4cc(tmp_path):
     info = parse_project(_make_minimal_bundle(tmp_path))
     result = json.loads(project_to_json(info, lookup={}))
     assert result["vendors"] == {}
+
+
+def test_project_to_json_includes_track_list_field(tmp_path):
+    """The text output has both 'TRACKS (active)' (OCuA-derived, needs
+    plugin instances) and 'TRACK LIST' (registry-derived, complete count).
+    JSON must surface both — `tracks` for the plugin-chain view,
+    `track_list` for the registry-derived canonical list (matches Logic's
+    UI track count). Empty project has both as []."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    result = json.loads(project_to_json(info, lookup={}))
+    assert "track_list" in result
+    assert result["track_list"] == []
+
+
+def test_project_to_json_track_list_carries_registry_derived_entries():
+    """When raw evidence is present, track_list has one entry per registry
+    record with kind, track_id, strip_id and count fields. Test by passing
+    pre-built RegionCluster instances directly to project_to_json via a
+    helper that lets us inject."""
+    # Use the public API — synthesise via a real path-less call would need
+    # mocking; instead test the lower-level serialiser
+    from lpx_inspect import RegionCluster, _track_list_to_dicts
+    clusters = [
+        RegionCluster(base_name="Bass", count=0, first_offset=100,
+                      last_offset=100, kind="midi", track_id=93, strip_id=0),
+        RegionCluster(base_name="Synth", count=0, first_offset=200,
+                      last_offset=200, kind="midi", track_id=159, strip_id=0),
+    ]
+    out = _track_list_to_dicts(clusters)
+    assert len(out) == 2
+    assert out[0] == {
+        "name": "Bass", "kind": "midi", "track_id": 93,
+        "strip_id": 0, "region_count": 0,
+    }
+    assert out[1]["name"] == "Synth"
+    assert out[1]["track_id"] == 159
