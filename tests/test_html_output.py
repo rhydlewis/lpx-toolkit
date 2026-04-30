@@ -370,40 +370,36 @@ def test_render_omits_unused_section_when_no_other_plugins_from_vendor():
 # --- Open in Logic button ------------------------------------------------
 
 
-def test_render_includes_open_in_logic_button(tmp_path):
-    """When project_path is supplied, a button labelled 'Open in Logic'
+def test_render_includes_reveal_in_finder_button(tmp_path):
+    """When project_path is supplied, a button labelled 'Reveal in Finder'
     is rendered. When omitted, the button is not present (graceful)."""
     info = parse_project(_make_minimal_bundle(tmp_path))
     payload = json.loads(project_to_json(info, lookup={}))
     out = render_project_html(payload, project_path="/path/to/song.logicx")
-    assert "Open in Logic" in out
-    # Without project_path, no open-in-Logic button
+    assert "Reveal in Finder" in out
+    # Without project_path, no button
     out_no_path = render_project_html(payload)
-    assert "Open in Logic" not in out_no_path
+    assert "Reveal in Finder" not in out_no_path
 
 
-def test_render_embeds_open_command_with_project_path(tmp_path):
-    """The button copies a shell command with the project's absolute path
-    to the clipboard. The command must contain the project path."""
-    info = parse_project(_make_minimal_bundle(tmp_path, name="my-song"))
-    payload = json.loads(project_to_json(info, lookup={}))
-    project_path = "/absolute/path/to/my-song.logicx"
-    out = render_project_html(payload, lookup={}, project_path=project_path)
-    # The embedded command is the macOS `open -a "Logic Pro"` form
-    assert 'open -a' in out
-    assert "Logic Pro" in out
-    assert html.escape(project_path, quote=True) in out or project_path in out
-
-
-def test_render_includes_file_url_to_project_as_fallback(tmp_path):
-    """A file:// link to the project bundle works as a Finder-reveal
-    fallback when clipboard JS is blocked."""
+def test_render_button_links_to_file_url_for_project_path(tmp_path):
+    """The button is a `file://` link to the project bundle so clicking
+    opens Finder at that location."""
     info = parse_project(_make_minimal_bundle(tmp_path))
     payload = json.loads(project_to_json(info, lookup={}))
     project_path = "/absolute/path/to/song.logicx"
     out = render_project_html(payload, lookup={}, project_path=project_path)
-    # file:// URL with the project path appears
     assert f"file://{project_path}" in out
+
+
+def test_render_does_not_include_open_in_logic_or_clipboard_command(tmp_path):
+    """The previous clipboard-copy button is gone — no `open -a` shell
+    command should be emitted."""
+    info = parse_project(_make_minimal_bundle(tmp_path))
+    payload = json.loads(project_to_json(info, lookup={}))
+    out = render_project_html(payload, project_path="/x.logicx")
+    assert "Open in Logic" not in out
+    assert "open -a" not in out
 
 
 def test_render_html_works_without_lookup_or_path(tmp_path):

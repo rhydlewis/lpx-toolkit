@@ -1347,52 +1347,16 @@ details.vendor-expandable .count {
 .vendor-plugin .vc-meta { color: var(--grey); font-size: 10px; }
 .vendor-empty { color: var(--grey); font-style: italic; padding: 4px 0; }
 
-/* Open-in-Logic button */
-.open-bar {
-  display: flex; align-items: center; gap: 12px;
-  margin: 0 0 24px; flex-wrap: wrap;
-}
-.open-btn {
+/* Reveal-in-Finder button */
+.open-bar { margin: 0 0 24px; }
+a.open-btn {
   display: inline-flex; align-items: center; gap: 8px;
-  font: inherit; font-size: 11px; letter-spacing: .18em;
+  font-size: 11px; letter-spacing: .18em;
   text-transform: uppercase; color: var(--ink); background: var(--amber);
   border: 1px solid var(--amber); padding: 8px 14px;
-  cursor: pointer; transition: background .15s;
+  text-decoration: none; transition: background .15s;
 }
-.open-btn:hover { background: var(--bone); border-color: var(--bone); }
-.open-btn:disabled { opacity: .6; cursor: default; }
-.open-bar a.path-link {
-  color: var(--grey); font-size: 11px; text-decoration: none;
-  border-bottom: 1px dashed var(--grey-2);
-}
-.open-bar a.path-link:hover { color: var(--bone-dim); }
-.open-toast {
-  font-size: 11px; color: var(--phosphor);
-  letter-spacing: .12em; text-transform: uppercase;
-  opacity: 0; transition: opacity .2s;
-}
-.open-toast.show { opacity: 1; }
-"""
-
-
-_OPEN_BTN_JS = r"""
-(function () {
-  const btn = document.querySelector('.open-btn');
-  const toast = document.querySelector('.open-toast');
-  if (!btn || !toast) return;
-  btn.addEventListener('click', async function () {
-    const cmd = btn.getAttribute('data-cmd') || '';
-    try {
-      await navigator.clipboard.writeText(cmd);
-      toast.textContent = '✓ Copied — paste in Terminal';
-      toast.classList.add('show');
-      setTimeout(function () { toast.classList.remove('show'); }, 3000);
-    } catch (err) {
-      toast.textContent = 'Clipboard blocked — use the path link →';
-      toast.classList.add('show');
-    }
-  });
-})();
+a.open-btn:hover { background: var(--bone); border-color: var(--bone); }
 """
 
 
@@ -1670,19 +1634,14 @@ def _render_diagnostics(warnings: list[dict]) -> str:
 
 
 def _render_open_bar(project_path: str | None) -> str:
-    """Header row with an Open-in-Logic button (clipboard JS) + Finder
-    fallback link. Empty when no path is supplied."""
+    """Header row with a 'Reveal in Finder' button linking to the project
+    bundle via file:// URL. Empty when no path is supplied."""
     if not project_path:
         return ""
-    cmd = f'open -a "Logic Pro" "{project_path}"'
     file_url = f"file://{project_path}"
     return (
         f'<div class="open-bar">'
-        f'<button class="open-btn" data-cmd="{_e(cmd)}" type="button">'
-        f'Open in Logic'
-        f'</button>'
-        f'<a class="path-link" href="{_e(file_url)}">Reveal in Finder</a>'
-        f'<span class="open-toast"></span>'
+        f'<a class="open-btn" href="{_e(file_url)}">Reveal in Finder</a>'
         f'</div>'
     )
 
@@ -1750,7 +1709,6 @@ def render_project_html(
         f'</section>'
         f'</div>'
         f'<footer class="footer">lpx-toolkit · read-only</footer>'
-        f'<script>{_OPEN_BTN_JS}</script>'
         f'</body></html>\n'
     )
 
