@@ -8,12 +8,6 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 ## Pending
 
-### Bet 2 — output composability (next up)
-
-#### #18 Auval cache layer with mtime invalidation `[Bet 2b]`
-
-Cache parsed `auval -l` table at `~/.cache/lpx-toolkit/auval.json`. Invalidate when `/Library/Audio/Plug-Ins/Components/` mtime advances. Eliminates the 5–30s cold start that dominates batch-use UX.
-
 ### Bet 3 — cross-project use
 
 #### #19 Cross-project rollup `--rollup` `[Bet 3]`
@@ -158,6 +152,10 @@ Added `find_track_header_records()` to pick up MIDI/instrument track names that 
 #### #23 Vendor rollup ✓
 
 Closed by #17 — `vendors` is a top-level field in the JSON output. Standalone CLI display can be added later if needed.
+
+#### #18 Auval cache layer with mtime invalidation ✓
+
+`auval_lookup_cached()` reads/writes `~/.cache/lpx-toolkit/auval.json`. Invalidates when `/Library/Audio/Plug-Ins/Components/` mtime advances. `main()` uses this in place of `auval_lookup()`. 8 tests in `tests/test_auval_cache.py` covering: round-trip, missing/corrupt cache, fresh-cache hit, mtime-stale refresh, cold start, auval-unavailable degradation, and the default cache path location (outside the project bundle so the read-only contract is preserved).
 
 #### #28 Strict region→strip bridge ✓ (audio strip mapping)
 

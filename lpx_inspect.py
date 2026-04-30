@@ -764,6 +764,70 @@ def auval_lookup() -> dict[str, str]:
     return table
 
 
+# ---------------------------------------------------------------------------
+# Auval cache layer (#18)
+#
+# `auval -l` is slow (5-30s cold start) and macOS-only. We cache the parsed
+# table at ~/.cache/lpx-toolkit/auval.json and invalidate when the system
+# Audio Units folder mtime advances.
+# ---------------------------------------------------------------------------
+
+AUVAL_CACHE_PATH = Path.home() / ".cache" / "lpx-toolkit" / "auval.json"
+COMPONENTS_DIR = Path("/Library/Audio/Plug-Ins/Components")
+
+
+def get_components_mtime() -> float | None:
+    """Latest mtime of the Audio Units components folder, or None if missing."""
+    try:
+        return COMPONENTS_DIR.stat().st_mtime
+    except (FileNotFoundError, PermissionError):
+        return None
+
+
+def save_auval_cache(
+    table: dict[str, str],
+    components_mtime: float | None,
+    path: Path = AUVAL_CACHE_PATH,
+) -> None:
+    """Write the parsed auval table + components mtime to disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "components_mtime": components_mtime,
+        "table": table,
+    }))
+
+
+def load_auval_cache(path: Path = AUVAL_CACHE_PATH) -> tuple[dict[str, str], float | None]:
+    """Return (table, components_mtime). Empty + None when missing or corrupt."""
+    if not path.exists():
+        return {}, None
+    try:
+        payload = json.loads(path.read_text())
+        return payload.get("table", {}), payload.get("components_mtime")
+    except (json.JSONDecodeError, OSError):
+        return {}, None
+
+
+def auval_lookup_cached(path: Path = AUVAL_CACHE_PATH) -> dict[str, str]:
+    """Return the auval table, using a disk cache invalidated by mtime.
+
+    Cold start (no cache): run auval, save the result, return it.
+    Warm path (cache exists, components mtime unchanged): return cache.
+    Stale (components mtime advanced): re-run auval, refresh cache.
+    auval missing or broken: return empty dict; don't write cache.
+    """
+    cached_table, cached_mtime = load_auval_cache(path=path)
+    current_mtime = get_components_mtime()
+
+    if cached_table and cached_mtime == current_mtime:
+        return cached_table
+
+    fresh = auval_lookup()
+    if fresh:
+        save_auval_cache(fresh, current_mtime, path=path)
+    return fresh
+
+
 def deduplicate(refs: list[AURef]) -> list[AURef]:
     """Keep distinct (offset, fingerprint) refs — same plugin at different
     offsets is genuinely separate (different track or undo-history entry)."""
@@ -1078,7 +1142,7 @@ def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
     alt = next(Path(path).glob("Alternatives/*"))
     raw = (alt / "ProjectData").read_bytes()
     info = parse_project(Path(path))
-    lookup = auval_lookup()
+    lookup = auval_lookup_cached()
 
     if as_json:
         print(project_to_json(info, lookup))
