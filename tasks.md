@@ -100,16 +100,27 @@ What's been ruled out:
 
 **MINIMAL-TEST DIFF FINDINGS (2026-04-30):**
 
-User produced a clean 2-track minimal pair (`LPX Test Original.logicx` Bass=row1/Synth=row2 vs `LPX Test Edited.logicx` Synth=row1/Bass=row2). Localised the ordering data to **per-track "track-info" records**:
+User produced a clean 2-track minimal pair (`LPX Test Original.logicx` Bass=row1/Synth=row2 vs `LPX Test Edited.logicx` Synth=row1/Bass=row2). Both files are Logic 12 (busy-living was created in Logic 11, saved in Logic 12).
 
-- Magic header: `\x04\x02\x07\x01\x00\x00\x00\x08\x80\x4f\x12\x00`
-- Field at **+24 (uint16 LE) = 1-based UI row position** (verified)
-- Value `0` means "default ordering" (use track-creation order); non-zero means explicit row index
-- Smart Controls bplists added when the user clicked tracks during reorder were red herrings — they're auto-generated UI metadata, not ordering
+**Initial hypothesis (CORRECTED)**: I thought the `\x04\x02\x07\x01` blocks at @250 and @950 were per-track row positions. They're **screensets** — Logic stores 2 by default. busy-living has the same blocks at the same offsets with values `3` and `7`, which can't be row positions for a 69-track project. The earlier claim was a coincidence — reordering tracks updates the screenset cursor positions as a side-effect.
 
-**BUT**: the magic doesn't appear in the busy-living project (Logic 12.2, 69 tracks) — only in the minimal test files (likely Logic 11.x). The encoding is Logic-version-dependent or compacted in larger projects. CLAUDE.md "Region records and user-renamed track names" section has the full breakdown.
+**The real lead** is at file offsets ~7896-8100. ORIG has populated UUID-prefixed records there. EDIT has them **zeroed out** and replaced with sequential counters:
 
-**Recommended next step**: produce a Logic 12 minimal pair (2-track project, save with no changes → save with row swap) and re-diff. The Logic 11 finding gives us a clear template to look for; we just need the Logic 12 version of the same structure.
+```
+ORIG: 1e 00 00 00 00 00 00 00 [16-byte UUID]
+ORIG: 21 00 00 00 00 00 00 00 [16-byte UUID]
+EDIT: 19 00 00 00 04 00 00 00 [16 zero bytes]
+EDIT: 19 00 00 00 08 00 00 00 [16 zero bytes]
+EDIT: 19 00 00 00 0c 00 00 00 [16 zero bytes]
+```
+
+First uint32 fixed at `0x19` (type tag), second uint32 increments by 4. **This is the most likely candidate for the row-ordering structure**: when the user manually reordered, Logic replaced UUID-keyed entries with a sequential explicit list.
+
+**Next investigation steps:**
+1. Identify what type `0x19` records are (search for the same pattern across the busy-living project — should find ~69 of them if hypothesis holds)
+2. Decode the original (non-zeroed) entries — figure out where the UUIDs key into for the track lookup
+3. Verify on busy-living: 69 tracks → expect 69 of these records in some order
+4. Test that this reconstructs the UI row order accurately
 
 Other angles still untried (from earlier sessions):
 

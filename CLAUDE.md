@@ -52,15 +52,32 @@ Field at **+24 (uint16 LE) = 1-based UI row position**. Verified:
 
 Value `0` appears to mean "default ordering" (the track inherits its position from track-creation order); a non-zero value is an explicit row index. After any manual reorder, both tracks involved get explicit values.
 
-**Caveat**: the magic `\x04\x02\x07\x01` only appears in the minimal test files (Logic 11.x freshly-created project with 2 tracks). It does NOT appear in the busy-living project (Logic 12.2, 69 tracks). The encoding is either Logic-version-dependent OR these blocks are part of a Logic 11 template that gets stripped/rewritten in larger projects. Possibilities to investigate:
+**CORRECTION (2026-04-30)**: the `\x04\x02\x07\x01` blocks at @250 and @950 are **screensets** (Logic stores 2 by default), not per-track records. Verified — busy-living also has them, with `+24` values of `3` and `7` (irrelevant to a 69-track project's row positions). The earlier "row position" claim was a coincidence — when the user reordered tracks, the screenset cursor positions auto-updated, which is the change that propagated through `+24`.
 
-- Different magic in Logic 12 — search for similar 16-byte structures with `04 00 00 00 01 00 01 00 ...` payloads
-- The blocks may live elsewhere in larger projects (e.g. inside an `ivnE` Environment record)
-- Logic might use a more compact encoding once the project exceeds N tracks
+**Real lead, found late in the session**: bytes ~7896-8100 in the EDIT file show a striking pattern. The ORIG file has populated UUID-prefixed records:
 
-For #34 to be production-ready: produce a *Logic 12* minimal-test pair (one before, one after a row swap) and re-do the diff. The Logic 11 finding here is a useful waypoint but probably not the final encoding.
+```
+ORIG @7896: 1e 00 00 00 00 00 00 00 98 e5 c7 04 44 60 11 f1 a3 d5 a6 4d 86 1d 59 4a
+ORIG @7928: 21 00 00 00 00 00 00 00 98 e1 6f f6 44 60 11 f1 ae 1a 15 ba 0e 06 47 37
+ORIG @7960: 21 00 00 00 04 00 00 00 ...UUID...
+```
 
-Still to verify on a real project: (1) extracting the row positions and reconstructing the UI order; (2) what fields at +20, +32 mean (also changed in the diff); (3) which track each block belongs to (the test project had blocks at fixed offsets in both files so block 1 = Bass and block 2 = Synth was inferable from which fields changed).
+The EDIT file has the same offsets but with the UUIDs **zeroed out** and replaced by sequential counters:
+
+```
+EDIT @7896: 19 00 00 00 04 00 00 00 [16 zeros]
+EDIT @7928: 19 00 00 00 08 00 00 00 [16 zeros]
+EDIT @7960: 19 00 00 00 0c 00 00 00 [16 zeros]
+EDIT @7992: 19 00 00 00 10 00 00 00 [16 zeros]
+...
+```
+
+The first uint32 is constant `0x19` (25 = type tag, possibly "cleared" or "linked-list-entry"). The second uint32 increments by 4 — a sequential index. **This is the most likely candidate for the row-ordering structure** — when the user manually reordered, Logic replaced a non-sequential identifier list with an explicit sequential ordering, zeroing out the old UUID-keyed entries.
+
+Next investigation needs to:
+1. Decode what type `0x19` records are
+2. Map the sequential index back to the track each entry refers to (the UUIDs probably keyed into another table that gives us the track)
+3. Test on the busy-living project (69 tracks → 69 of these records, presumably)
 
 **Region→strip mapping inside gRuA records is still unsolved.** The strip number above lives in the registry record, not the region record. Tried so far for region records (don't redo without new evidence):
 
