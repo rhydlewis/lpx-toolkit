@@ -10,10 +10,6 @@ Priority ordering follows `pm-feedback.md` (Bet 1 → Bet 2 → Bet 3) and the u
 
 ### Bet 2 — output composability (next up)
 
-#### #17 JSON output mode `[Bet 2a]`
-
-`--json` flag emits structured project data (tracks, plugins, metadata) for piping into other tools. Same internal model the HTML dashboard will consume. Schema must include: project metadata, per-track strip + plugin chain, phantom plugins, vendor rollup, diagnostics.
-
 #### #18 Auval cache layer with mtime invalidation `[Bet 2b]`
 
 Cache parsed `auval -l` table at `~/.cache/lpx-toolkit/auval.json`. Invalidate when `/Library/Audio/Plug-Ins/Components/` mtime advances. Eliminates the 5–30s cold start that dominates batch-use UX.
@@ -39,10 +35,6 @@ Package as installable CLI: `pyproject.toml` `[project.scripts]` entry point, Py
 #### #22 Phantom plugin distinction
 
 Separate plugins on active tracks vs orphans (undo history, deleted tracks). Surface as a dedicated section per the inspector-mockup design. Makes "is this project clean?" a single-glance answer.
-
-#### #23 Vendor rollup
-
-Count plugins per manufacturer 4CC. Per-project summary feeds into the cross-project `--rollup`. Trivial once auval cache is keyed by manufacturer.
 
 #### #24 Extended metadata
 
@@ -122,6 +114,8 @@ First uint32 fixed at `0x19` (type tag), second uint32 increments by 4. **This i
 3. Verify on busy-living: 69 tracks → expect 69 of these records in some order
 4. Test that this reconstructs the UI row order accurately
 
+**0x19 hypothesis ALSO ruled out (2026-04-30 follow-up):** busy-living has only 1 run of 24-byte-stride `0x19` records (257 entries). Only 1 entry has a non-zero UUID; all others are zeroed. That's not a 69-track ordering — it's a sparse pre-allocated table with mostly empty slots. The 0x19 records in the test EDIT file may have been misleading. **#34 is officially deferred** until a different angle surfaces. Cluster-based ordering (track-id sort) ships as the working approximation.
+
 Other angles still untried (from earlier sessions):
 
 1. Enumerate every NSKeyedArchive `$classname` across all 225 blobs — look for `TracksAreaTrackList`, `TrackListOrdering`, or similar named class
@@ -156,6 +150,14 @@ Added `find_track_header_records()` to pick up MIDI/instrument track names that 
 #### #33 Stop deduping by name — use registry records as authoritative track count ✓
 
 `tracks_from_evidence()` replaces name-collapsing `tracks_from_regions()` in the main pipeline. One entry per registry record; gRuA region counts attach to the first matching name. Output now matches Logic's actual track count exactly (69 in busy-living test project).
+
+#### #17 JSON output mode `[Bet 2a]` ✓
+
+`--json` flag emits structured project data via `project_to_json()`. Schema versioned (`schema_version: 1`) with stable top-level keys: `project` (metadata + dates), `tracks` (per-strip plugin chain), `vendors` (manufacturer 4CC → count). Pipes cleanly into `jq` / `python -c "import json,sys; ..."`. 7 schema-locking tests in `tests/test_json_output.py`.
+
+#### #23 Vendor rollup ✓
+
+Closed by #17 — `vendors` is a top-level field in the JSON output. Standalone CLI display can be added later if needed.
 
 #### #28 Strict region→strip bridge ✓ (audio strip mapping)
 

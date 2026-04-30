@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Logic Pro project inspector — extracts metadata, tracks, and AU plugins."""
+import json
 import plistlib
 import re
 import struct
@@ -1003,11 +1004,85 @@ def summarise_bplists(blobs: list[BPlistBlob]) -> None:
         print(f"\nDistinct channel UUIDs referenced: {len(channel_uuids)}")
 
 
-def main(path: str, dump_bplists: bool = False) -> None:
+JSON_SCHEMA_VERSION = 1
+
+
+def _au_to_dict(au: AURef, lookup: dict[str, str]) -> dict:
+    """Serialise an AURef to the JSON shape."""
+    return {
+        "type_code": au.type_code,
+        "subtype": au.subtype,
+        "manufacturer": au.manufacturer,
+        "fingerprint": au.fingerprint,
+        "display_name": au.display_name,
+        "resolved_name": lookup.get(au.fingerprint),
+    }
+
+
+def _track_to_dict(track: Track, lookup: dict[str, str]) -> dict:
+    """Serialise a Track to the JSON shape."""
+    return {
+        "kind": track.kind,
+        "strip_name": track.name,
+        "is_active": track.is_active,
+        "display_name": track.display_name(lookup),
+        "instrument": _au_to_dict(track.instrument, lookup) if track.instrument else None,
+        "midi_fx": [_au_to_dict(fx, lookup) for fx in track.midi_fx],
+        "audio_fx": [_au_to_dict(fx, lookup) for fx in track.audio_fx],
+    }
+
+
+def project_to_json(info: ProjectInfo, lookup: dict[str, str]) -> str:
+    """Serialise project state to a stable JSON wire format.
+
+    Schema (version 1):
+      schema_version: int
+      project: { name, key, gender, bpm, time_signature, track_count,
+                 created_at (ISO), modified_at (ISO) }
+      tracks: [ { kind, strip_name, display_name, is_active,
+                  instrument, midi_fx, audio_fx } ]
+      vendors: { manufacturer_4cc: plugin_count }
+    """
+    user_tracks = [t for t in info.tracks if t.is_user_track and t.is_active]
+    track_dicts = [_track_to_dict(t, lookup) for t in user_tracks]
+
+    # Vendor rollup: count plugins per manufacturer 4CC
+    vendor_counts: Counter[str] = Counter()
+    for t in user_tracks:
+        if t.instrument:
+            vendor_counts[t.instrument.manufacturer] += 1
+        for fx in t.midi_fx:
+            vendor_counts[fx.manufacturer] += 1
+        for fx in t.audio_fx:
+            vendor_counts[fx.manufacturer] += 1
+
+    payload = {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "project": {
+            "name": info.name,
+            "key": info.key,
+            "gender": info.gender,
+            "bpm": info.bpm,
+            "time_signature": f"{info.sig_numerator}/{info.sig_denominator}",
+            "track_count": info.track_count,
+            "created_at": info.created_at.isoformat(),
+            "modified_at": info.modified_at.isoformat(),
+        },
+        "tracks": track_dicts,
+        "vendors": dict(vendor_counts),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def main(path: str, dump_bplists: bool = False, as_json: bool = False) -> None:
     alt = next(Path(path).glob("Alternatives/*"))
     raw = (alt / "ProjectData").read_bytes()
     info = parse_project(Path(path))
     lookup = auval_lookup()
+
+    if as_json:
+        print(project_to_json(info, lookup))
+        return
 
     fmt_dt = "%Y-%m-%d %H:%M"
     print(f"Project:        {info.name}")
@@ -1070,5 +1145,6 @@ def main(path: str, dump_bplists: bool = False) -> None:
 if __name__ == "__main__":
     args = sys.argv[1:]
     dump = "--bplists" in args
-    args = [a for a in args if a != "--bplists"]
-    main(args[0], dump_bplists=dump)
+    as_json = "--json" in args
+    args = [a for a in args if a not in ("--bplists", "--json")]
+    main(args[0], dump_bplists=dump, as_json=as_json)

@@ -65,7 +65,10 @@ See `CLAUDE.md` for a detailed walk through the format and the specific quirks t
 ```sh
 python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx
 python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --bplists
+python3 lpx_inspect.py ~/Music/Logic/SomeProject.logicx --json
 ```
+
+The `--json` flag emits a structured payload (project metadata, per-track strip + plugin chain, vendor rollup) for piping into other tools. Schema is versioned via the top-level `schema_version` field (currently `1`).
 
 ## Tests
 
