@@ -82,8 +82,11 @@ lpxtool --serve ~/Music/Logic
 # Structured JSON for piping into other tools
 lpxtool --json ~/Music/Logic/SomeProject.logicx
 
-# Audit plugin usage across many projects at once
+# Audit plugin usage across many projects (opens browser)
 lpxtool --rollup ~/Music/Logic/*.logicx
+
+# Same audit as JSON, for scripting
+lpxtool --rollup --json ~/Music/Logic/*.logicx
 ```
 
 Run `lpxtool --help` for the full flag list.
@@ -109,13 +112,21 @@ JSON endpoints are exposed for tooling: `/api/projects`, `/api/projects/<index>`
 
 ### Cross-project rollup
 
-`--rollup` aggregates plugin usage across many projects:
+`--rollup` aggregates plugin usage across many projects and opens the result in your browser. The view shows the most-used plug-ins, top manufacturers, and a clickable list of projects you can drill into.
 
 ```sh
 lpxtool --rollup ~/Music/Logic/*.logicx
 ```
 
-Output is JSON with per-project summaries plus aggregated counts: `fingerprints` (how many projects each plugin appears in) and `vendors` (total plugin count per manufacturer). Unparseable projects are skipped with a warning to stderr; the rollup still completes.
+For scripting, add `--json` to dump the same data to stdout:
+
+```sh
+lpxtool --rollup --json ~/Music/Logic/*.logicx | jq '.fingerprints'
+```
+
+JSON shape: per-project summaries plus aggregated counts — `fingerprints` (how many projects each plug-in appears in) and `vendors` (total plug-in count per manufacturer). Unparseable projects are skipped with a warning to stderr; the rollup still completes.
+
+You can also reach the rollup view via `--serve`: the library index links to `/rollup` for the directory you're browsing.
 
 ## Caveats
 

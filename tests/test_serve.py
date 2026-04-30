@@ -201,6 +201,26 @@ def test_serve_api_rollup_returns_aggregate_json(live_server):
     assert "vendors" in data
 
 
+def test_serve_rollup_html_returns_browsable_view(live_server):
+    """`/rollup` returns an HTML rollup view, not raw JSON — clickable
+    project list + top plugins + top manufacturers."""
+    status, ctype, body = _get(live_server, "/rollup")
+    assert status == 200
+    assert "text/html" in ctype
+    # Project names visible on the page
+    assert "alpha" in body
+    assert "beta" in body
+    # Links into per-project dashboards
+    assert 'href="/project/0"' in body or 'href="/project/1"' in body
+
+
+def test_serve_index_links_to_rollup(live_server):
+    """Library index advertises the /rollup view so users can find it
+    when they entered through `--serve` rather than `--rollup`."""
+    _, _, body = _get(live_server, "/")
+    assert 'href="/rollup"' in body
+
+
 # --- start_serve port selection ---
 
 def test_start_serve_picks_free_port_when_zero(tmp_path):
@@ -225,3 +245,31 @@ def test_cli_accepts_serve_with_port():
     args = parser.parse_args(["--serve", "--port", "8765", "/tmp"])
     assert args.serve is True
     assert args.port == 8765
+
+
+# --- --rollup serves an HTML view by default ---
+
+def test_start_serve_for_projects_accepts_explicit_paths(tmp_path):
+    """`--rollup` needs the server to accept an explicit project list
+    rather than scanning a directory. start_serve_for_projects spins up
+    a server scoped to exactly the bundles passed in."""
+    from lpx_inspect import start_serve_for_projects
+    bundles = [
+        _make_minimal_bundle(tmp_path, "one"),
+        _make_minimal_bundle(tmp_path, "two"),
+    ]
+    httpd, port = start_serve_for_projects(bundles, port=0, open_browser=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, ctype, body = _get(port, "/api/projects")
+        assert status == 200
+        data = json.loads(body)
+        assert {p["name"] for p in data} == {"one", "two"}
+        # Rollup HTML available for the same explicit set
+        status, ctype, body = _get(port, "/rollup")
+        assert status == 200
+        assert "text/html" in ctype
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

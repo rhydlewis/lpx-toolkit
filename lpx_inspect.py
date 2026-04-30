@@ -2523,6 +2523,75 @@ def main_rollup(paths: list[str]) -> None:
 # bottleneck) but the server itself is platform-agnostic.
 
 _SERVE_INDEX_STYLE = """
+.rollup-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-text);
+  font-size: 13px; font-weight: 500; letter-spacing: -0.005em;
+  color: var(--link); text-decoration: none;
+  margin: 0 0 24px;
+  border-bottom: 1px solid transparent;
+  transition: border-color .15s;
+}
+.rollup-link:hover { border-bottom-color: var(--link); }
+
+.rollup-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 28px; max-width: 1400px; margin: 0 auto 32px;
+}
+@media (max-width: 980px) { .rollup-grid { grid-template-columns: 1fr; } }
+.rollup-section {
+  border: 1px solid var(--line); background: var(--ink-2);
+  border-radius: 8px; overflow: hidden;
+}
+.rollup-section-title {
+  font-family: var(--font-text);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase;
+  color: var(--grey);
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--ink-3);
+}
+.rollup-row {
+  display: grid; grid-template-columns: 1fr auto auto;
+  align-items: center; gap: 12px;
+  padding: 9px 16px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+}
+.rollup-row:last-child { border-bottom: none; }
+.rollup-row .name {
+  color: var(--bone); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rollup-row .name .vendor {
+  font-family: var(--font-mono);
+  font-size: 10px; color: var(--grey);
+  margin-right: 8px;
+}
+.rollup-row .bar {
+  width: 80px; height: 6px; background: var(--ink-3);
+  border-radius: 3px; position: relative; overflow: hidden;
+}
+.rollup-row .bar::after {
+  content: ""; position: absolute; inset: 0;
+  width: var(--w, 30%);
+  background: linear-gradient(90deg, var(--amber), var(--copper));
+}
+.rollup-row .count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; color: var(--bone);
+  font-weight: 500; width: 32px; text-align: right;
+}
+.rollup-projects {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.rollup-projects a.proj-card .proj-meta {
+  font-family: var(--font-mono);
+  font-size: 11px; color: var(--grey-2);
+  margin-top: 6px;
+}
 .proj-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px; max-width: 1400px; margin: 0 auto;
@@ -2574,12 +2643,16 @@ def _list_projects(directory: Path) -> list[Path]:
     )
 
 
-def _render_serve_index(directory: Path, projects: list[Path]) -> str:
-    """HTML for the / route — clickable list of projects in `directory`.
+def _render_serve_index(label, projects: list[Path]) -> str:
+    """HTML for the / route — clickable list of projects.
+
+    `label` is shown in the header (a directory path for `--serve`,
+    a "rollup of N projects" string for `--rollup`). Accepts Path or str.
 
     Reuses _HTML_STYLE so the index inherits the dashboard's typography
     and theme variables; the theme toggle is wired up the same way.
     """
+    label = str(label) if label else ""
     boot_script = (
         '<script>(function(){try{'
         "var t=localStorage.getItem('lpxtool-theme');"
@@ -2614,9 +2687,19 @@ def _render_serve_index(directory: Path, projects: list[Path]) -> str:
     else:
         body = (
             '<div class="proj-empty">'
-            'No .logicx projects found in this directory.'
+            'No .logicx projects found here.'
             '</div>'
         )
+
+    rollup_link = (
+        '<a class="rollup-link" href="/rollup">'
+        'View rollup across these projects →</a>'
+    ) if projects else ''
+
+    label_html = (
+        f'<span class="path">{_e(label)}</span> · '
+        if label else ''
+    )
 
     return (
         '<!doctype html>\n<html lang="en"><head>'
@@ -2628,8 +2711,9 @@ def _render_serve_index(directory: Path, projects: list[Path]) -> str:
         '</head><body>'
         f'<div class="topbar">{toggle_button}</div>'
         '<h1 class="h-display"><em>lpx</em>·toolkit</h1>'
-        f'<p class="h-sub"><span class="path">{_e(str(directory))}</span> · '
+        f'<p class="h-sub">{label_html}'
         f'{len(projects)} project{"s" if len(projects) != 1 else ""}</p>'
+        f'{rollup_link}'
         f'{body}'
         f'{_render_footer(suffix="serving locally")}'
         f'{toggle_script}'
@@ -2637,18 +2721,194 @@ def _render_serve_index(directory: Path, projects: list[Path]) -> str:
     )
 
 
-def make_serve_handler(directory: Path):
-    """Return a BaseHTTPRequestHandler subclass bound to `directory`.
+def _render_rollup_html(
+    rollup: dict,
+    project_paths: list[Path],
+    lookup: dict[str, str] | None = None,
+    *,
+    label: str = "",
+) -> str:
+    """Browseable rollup dashboard. Top plugins by project count, top
+    manufacturers by total plugins, clickable project list.
+
+    Reuses the dashboard's CSS (typography, palette, theme toggle,
+    footer). Each project card links to /project/<idx> so the user can
+    drill in.
+    """
+    lookup = lookup or {}
+    fingerprints: dict[str, int] = rollup.get("fingerprints", {})
+    vendors: dict[str, int] = rollup.get("vendors", {})
+    project_summaries: list[dict] = rollup.get("projects", [])
+
+    boot_script = (
+        '<script>(function(){try{'
+        "var t=localStorage.getItem('lpxtool-theme');"
+        "if(t)document.documentElement.setAttribute('data-theme',t);"
+        '}catch(e){}})();</script>'
+    )
+    toggle_button = (
+        '<button id="theme-toggle" class="theme-toggle" type="button" '
+        'aria-label="Toggle light/dark theme" title="Toggle light/dark theme">'
+        '◐</button>'
+    )
+    toggle_script = (
+        '<script>(function(){'
+        "var b=document.getElementById('theme-toggle');if(!b)return;"
+        "b.addEventListener('click',function(){"
+        'var r=document.documentElement;'
+        "var next=r.getAttribute('data-theme')==='light'?'dark':'light';"
+        "r.setAttribute('data-theme',next);"
+        "try{localStorage.setItem('lpxtool-theme',next);}catch(e){}"
+        '});})();</script>'
+    )
+
+    # Top plugins — sorted descending by project count.
+    top_plugins = sorted(
+        fingerprints.items(), key=lambda kv: (-kv[1], kv[0])
+    )[:25]
+    max_plugin_count = max((c for _, c in top_plugins), default=1)
+
+    plugin_rows = []
+    for fp, count in top_plugins:
+        resolved = lookup.get(fp, fp)
+        if ": " in resolved:
+            vendor, name = resolved.split(": ", 1)
+            display = (
+                f'<span class="vendor">{_e(vendor)}</span>{_e(name)}'
+            )
+        else:
+            display = _e(resolved)
+        pct = int(round(100 * count / max_plugin_count))
+        plugin_rows.append(
+            f'<div class="rollup-row">'
+            f'<div class="name">{display}</div>'
+            f'<div class="bar" style="--w: {pct}%;"></div>'
+            f'<div class="count">{count}</div>'
+            f'</div>'
+        )
+
+    # Top manufacturers — sorted descending by total plugins.
+    top_vendors = sorted(
+        vendors.items(), key=lambda kv: (-kv[1], kv[0])
+    )[:25]
+    max_vendor_count = max((c for _, c in top_vendors), default=1)
+
+    vendor_rows = []
+    for vendor_4cc, count in top_vendors:
+        full = _vendor_display_name(vendor_4cc, lookup)
+        if full == vendor_4cc:
+            display = f'<span class="vendor">{_e(vendor_4cc)}</span>'
+        else:
+            display = (
+                f'<span class="vendor">{_e(vendor_4cc)}</span>{_e(full)}'
+            )
+        pct = int(round(100 * count / max_vendor_count))
+        vendor_rows.append(
+            f'<div class="rollup-row">'
+            f'<div class="name">{display}</div>'
+            f'<div class="bar" style="--w: {pct}%;"></div>'
+            f'<div class="count">{count}</div>'
+            f'</div>'
+        )
+
+    # Clickable project cards. Match summary by name where possible.
+    summary_by_name = {s.get("name"): s for s in project_summaries}
+    project_cards = []
+    for i, p in enumerate(project_paths):
+        summary = summary_by_name.get(p.stem) or {}
+        plugin_count = summary.get("plugin_count", 0)
+        unique = summary.get("unique_fingerprints", 0)
+        project_cards.append(
+            f'<a class="proj-card" href="/project/{i}">'
+            f'<div class="proj-name">{_e(p.stem)}</div>'
+            f'<div class="proj-meta">'
+            f'{plugin_count} plug-in{"s" if plugin_count != 1 else ""}'
+            f' · {unique} unique'
+            f'</div>'
+            f'</a>'
+        )
+
+    n_unique_plugins = len(fingerprints)
+    n_vendors = len(vendors)
+    label_html = (
+        f'<span class="path">{_e(str(label))}</span> · '
+        if label else ''
+    )
+
+    plugins_block = (
+        '<div class="rollup-section">'
+        '<div class="rollup-section-title">Most-used plug-ins</div>'
+        + (
+            "".join(plugin_rows) if plugin_rows
+            else '<div class="rollup-row"><div class="name" '
+                 'style="color:var(--grey)">No plug-ins detected.</div>'
+                 '<div></div><div></div></div>'
+        )
+        + '</div>'
+    )
+    vendors_block = (
+        '<div class="rollup-section">'
+        '<div class="rollup-section-title">Most-used manufacturers</div>'
+        + (
+            "".join(vendor_rows) if vendor_rows
+            else '<div class="rollup-row"><div class="name" '
+                 'style="color:var(--grey)">No manufacturers detected.</div>'
+                 '<div></div><div></div></div>'
+        )
+        + '</div>'
+    )
+
+    return (
+        '<!doctype html>\n<html lang="en"><head>'
+        '<meta charset="utf-8" />'
+        '<meta name="viewport" content="width=device-width, initial-scale=1" />'
+        '<title>Rollup · lpx-toolkit</title>'
+        f'{boot_script}'
+        f'<style>{_HTML_STYLE}{_SERVE_INDEX_STYLE}</style>'
+        '</head><body>'
+        f'<div class="topbar">{toggle_button}</div>'
+        '<h1 class="h-display">'
+        'Rollup'
+        '<span class="brand-suffix">· <em>lpx</em>·toolkit</span>'
+        '</h1>'
+        f'<p class="h-sub">{label_html}'
+        f'{len(project_paths)} projects · '
+        f'{n_unique_plugins} unique plug-ins · '
+        f'{n_vendors} manufacturers</p>'
+        '<a class="rollup-link" href="/">← Library index</a>'
+        '<div class="rollup-grid">'
+        f'{plugins_block}'
+        f'{vendors_block}'
+        '</div>'
+        '<div class="label">Projects</div>'
+        f'<div class="rollup-projects">{"".join(project_cards)}</div>'
+        f'{_render_footer(suffix="rollup view")}'
+        f'{toggle_script}'
+        '</body></html>\n'
+    )
+
+
+def make_serve_handler(project_provider, *, label: str = ""):
+    """Return a BaseHTTPRequestHandler subclass bound to a project source.
+
+    `project_provider` is a `Callable[[], list[Path]]` that returns the
+    bundles to serve. Two callers exist: `start_serve()` wraps a directory
+    (re-listed on each request, so newly-added projects appear), and
+    `start_serve_for_projects()` wraps an explicit, fixed list (used by
+    `--rollup`).
+
+    `label` shows up in the library-index header (e.g. the directory
+    path, or "rollup of N projects").
 
     Routes:
-      GET /                    HTML index of projects
+      GET /                    HTML library index (clickable cards)
+      GET /rollup              HTML rollup view (top plugins, vendors,
+                               clickable projects)
       GET /project/<idx>       HTML dashboard for one project
-      GET /api/projects        JSON list of projects in the directory
+      GET /api/projects        JSON project list
       GET /api/projects/<idx>  Full JSON payload for one project
-      GET /api/rollup          Aggregated rollup JSON across the directory
+      GET /api/rollup          Aggregated rollup JSON
     """
-    directory = Path(directory)
-
     class Handler(http.server.BaseHTTPRequestHandler):
         # Quiet the default access log; the user wants a clean terminal.
         def log_message(self, fmt, *args):
@@ -2658,12 +2918,20 @@ def make_serve_handler(directory: Path):
             route = urllib.parse.urlparse(self.path).path
 
             if route == "/":
-                projects = _list_projects(directory)
-                self._send(200, "text/html", _render_serve_index(directory, projects))
+                projects = project_provider()
+                self._send(200, "text/html", _render_serve_index(label, projects))
+                return
+
+            if route == "/rollup":
+                projects = project_provider()
+                lookup = auval_lookup_cached()
+                rollup = rollup_projects(projects, lookup)
+                html = _render_rollup_html(rollup, projects, lookup, label=label)
+                self._send(200, "text/html", html)
                 return
 
             if route == "/api/projects":
-                projects = _list_projects(directory)
+                projects = project_provider()
                 payload = [
                     {"index": i, "name": p.stem, "path": str(p)}
                     for i, p in enumerate(projects)
@@ -2672,7 +2940,7 @@ def make_serve_handler(directory: Path):
                 return
 
             if route == "/api/rollup":
-                projects = _list_projects(directory)
+                projects = project_provider()
                 lookup = auval_lookup_cached()
                 payload = rollup_projects(projects, lookup)
                 self._send(200, "application/json", json.dumps(payload, indent=2))
@@ -2681,7 +2949,7 @@ def make_serve_handler(directory: Path):
             project_html_match = re.fullmatch(r"/project/(\d+)", route)
             if project_html_match:
                 idx = int(project_html_match.group(1))
-                projects = _list_projects(directory)
+                projects = project_provider()
                 if 0 <= idx < len(projects):
                     project_path = projects[idx]
                     lookup = auval_lookup_cached()
@@ -2698,7 +2966,7 @@ def make_serve_handler(directory: Path):
             project_json_match = re.fullmatch(r"/api/projects/(\d+)", route)
             if project_json_match:
                 idx = int(project_json_match.group(1))
-                projects = _list_projects(directory)
+                projects = project_provider()
                 if 0 <= idx < len(projects):
                     project_path = projects[idx]
                     lookup = auval_lookup_cached()
@@ -2724,29 +2992,72 @@ def make_serve_handler(directory: Path):
     return Handler
 
 
+def _bind_server(
+    project_provider,
+    *,
+    label: str,
+    port: int,
+    open_browser: bool,
+    landing_path: str = "/",
+) -> tuple[http.server.ThreadingHTTPServer, int]:
+    """Common server-start helper used by both directory and explicit-list
+    entry points. Builds the handler, binds, optionally opens the browser
+    at `landing_path`."""
+    handler = make_serve_handler(project_provider, label=label)
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+    actual_port = httpd.server_address[1]
+
+    if open_browser:
+        url = f"http://127.0.0.1:{actual_port}{landing_path}"
+        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+
+    return httpd, actual_port
+
+
 def start_serve(
     directory: Path,
     port: int = 0,
     *,
     open_browser: bool = True,
 ) -> tuple[http.server.ThreadingHTTPServer, int]:
-    """Bind and return (httpd, port). Caller drives `serve_forever()`.
+    """Start a server scoped to all .logicx bundles inside `directory`.
 
     `port=0` asks the OS for a free port; the actual port is returned.
-    `open_browser` opens the index in the default browser shortly after
-    binding (used for the `--serve` CLI; tests pass False).
+    Provider re-lists on every request so newly-added projects appear
+    without restarting the server.
     """
-    handler = make_serve_handler(directory)
-    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
-    actual_port = httpd.server_address[1]
+    directory = Path(directory)
+    return _bind_server(
+        project_provider=lambda: _list_projects(directory),
+        label=str(directory),
+        port=port,
+        open_browser=open_browser,
+        landing_path="/",
+    )
 
-    if open_browser:
-        url = f"http://127.0.0.1:{actual_port}/"
-        # Defer the browser launch slightly so serve_forever() is ready
-        # to accept the first connection.
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
 
-    return httpd, actual_port
+def start_serve_for_projects(
+    paths: list[Path] | list[str],
+    port: int = 0,
+    *,
+    open_browser: bool = True,
+    landing_path: str = "/rollup",
+) -> tuple[http.server.ThreadingHTTPServer, int]:
+    """Start a server scoped to an explicit list of project bundles.
+
+    Used by `--rollup` so the user lands on `/rollup` directly. The
+    project list is fixed at start time (unlike `start_serve()` which
+    re-scans the directory).
+    """
+    bundles = [Path(p) for p in paths]
+    label = f"rollup of {len(bundles)} project{'s' if len(bundles) != 1 else ''}"
+    return _bind_server(
+        project_provider=lambda: bundles,
+        label=label,
+        port=port,
+        open_browser=open_browser,
+        landing_path=landing_path,
+    )
 
 
 def main_serve(directory: str | None, port: int = 0) -> int:
@@ -2766,6 +3077,32 @@ def main_serve(directory: str | None, port: int = 0) -> int:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("", file=sys.stderr)  # newline after ^C
+    finally:
+        httpd.server_close()
+    return 0
+
+
+def main_rollup_serve(paths: list[str], port: int = 0) -> int:
+    """`--rollup` interactive entry point — serve a rollup HTML view of
+    the explicit project list and open the browser at /rollup. Blocks
+    until Ctrl-C.
+
+    The legacy stdout-JSON behaviour stays available via `--rollup --json`.
+    """
+    bundles = [Path(p).expanduser() for p in paths]
+    httpd, actual_port = start_serve_for_projects(
+        bundles, port=port, open_browser=True, landing_path="/rollup",
+    )
+    print(
+        f"lpxtool serving rollup of {len(bundles)} projects on "
+        f"http://127.0.0.1:{actual_port}/rollup",
+        file=sys.stderr,
+    )
+    print("Press Ctrl-C to stop.", file=sys.stderr)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("", file=sys.stderr)
     finally:
         httpd.server_close()
     return 0
@@ -2860,8 +3197,12 @@ def cli(argv: list[str] | None = None) -> int:
         paths = ([args.path] if args.path else []) + (args.rollup_paths or [])
         if not paths:
             parser.error("--rollup requires at least one project path")
-        main_rollup(paths)
-        return 0
+        if args.json:
+            # Explicit JSON output to stdout — for tooling / scripting.
+            main_rollup(paths)
+            return 0
+        # Default: serve a browseable rollup view.
+        return main_rollup_serve(paths, port=args.port)
 
     if not args.path:
         parser.error("a project path is required (or use --rollup)")
