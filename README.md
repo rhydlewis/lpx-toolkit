@@ -43,6 +43,9 @@ Tracks:         3
 - Python 3.10 or newer
 - A `.logicx` project to inspect
 
+> [!NOTE]
+> Tested only against **Logic Pro 12.2**. Earlier and later versions of Logic may write `ProjectData` differently — extraction may degrade gracefully (some fields skipped) or surface unexpected results. If you hit a parse failure on another version, an issue with a small repro project is very welcome.
+
 ## Install
 
 The easiest route is [`uv`](https://docs.astral.sh/uv/) — no clone, no venv, no install:
