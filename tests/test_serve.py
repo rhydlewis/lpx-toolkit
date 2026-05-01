@@ -113,6 +113,170 @@ def test_render_serve_index_includes_theme_toggle(tmp_path):
     assert "lpxtool-theme" in out
 
 
+# --- #45 quick filter / search ---
+
+
+def test_render_serve_index_includes_search_input(tmp_path):
+    """A non-empty index ships a text input for filtering by project name."""
+    projects = [
+        _make_minimal_bundle(tmp_path, "alpha"),
+        _make_minimal_bundle(tmp_path, "beta"),
+    ]
+    out = _render_serve_index(tmp_path, projects)
+    assert 'id="proj-search"' in out
+    # Standard search-input semantics — type, role, accessible label
+    assert 'type="search"' in out
+    assert 'placeholder=' in out
+
+
+def test_render_serve_index_each_card_carries_searchable_data(tmp_path):
+    """Cards expose a `data-search` attribute pre-lowercased so the JS
+    filter can match without per-keystroke string allocation."""
+    projects = [
+        _make_minimal_bundle(tmp_path, "Foo Bar"),
+    ]
+    out = _render_serve_index(tmp_path, projects)
+    # Lowercased name appears in the data-search attribute.
+    assert 'data-search="' in out
+    # The bundle stem is searchable in lower case (case-insensitive matching)
+    assert "foo bar" in out
+
+
+def test_render_serve_index_includes_match_counter(tmp_path):
+    """A counter element shows 'Showing N of M' so the user has feedback
+    while filtering. Lives inside the page where the count line already is."""
+    projects = [
+        _make_minimal_bundle(tmp_path, "alpha"),
+        _make_minimal_bundle(tmp_path, "beta"),
+    ]
+    out = _render_serve_index(tmp_path, projects)
+    # The counter element exists with a stable id the JS can target.
+    assert 'id="proj-count"' in out
+
+
+def test_render_serve_index_omits_search_when_empty(tmp_path):
+    """An empty directory has nothing to filter — no input, no counter."""
+    out = _render_serve_index(tmp_path, [])
+    assert 'id="proj-search"' not in out
+    assert 'id="proj-count"' not in out
+
+
+def test_render_serve_index_filter_script_persists_query(tmp_path):
+    """Filter query persists across reloads via localStorage, matching the
+    theme + tab persistence convention already in the dashboard."""
+    projects = [_make_minimal_bundle(tmp_path, "alpha")]
+    out = _render_serve_index(tmp_path, projects)
+    assert "lpxtool-search" in out
+    assert "localStorage" in out
+
+
+def test_render_serve_index_search_html_escapes_project_names(tmp_path):
+    """Project names with HTML metacharacters must not break the
+    data-search attribute or inject markup."""
+    projects = [_make_minimal_bundle(tmp_path, "weird<name>")]
+    out = _render_serve_index(tmp_path, projects)
+    # The raw '<name>' must be escaped wherever it appears (including
+    # inside data-search). The page must remain a valid HTML document.
+    assert "<name>" not in out
+    assert "&lt;name&gt;" in out
+
+
+# --- #46 metadata chips on proj-card ---
+
+
+def _meta(**overrides):
+    """Build a synthetic index-metadata entry with sane defaults."""
+    base = {
+        "mtime": 1.0,
+        "name": "song",
+        "key": "C", "gender": "major",
+        "bpm": 120.0,
+        "track_count": 8,
+        "bundle_size_bytes": 12 * 1024 * 1024,  # 12 MB
+        "created_at": "2024-01-15T10:00:00",
+        "modified_at": "2026-04-25T10:00:00",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_render_serve_index_renders_chip_row_when_metadata_provided(tmp_path):
+    """When the handler supplies a metadata map, each card gets a chip
+    row carrying key+gender, BPM, track count, size, and modified-time."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    metadata = {str(project): _meta()}
+    out = _render_serve_index(tmp_path, [project], metadata=metadata)
+    assert 'class="proj-chips"' in out
+    assert "C major" in out          # key + gender chip
+    assert "120" in out              # BPM
+    assert "8" in out                # track count
+    assert "MB" in out               # size formatter ran
+
+
+def test_render_serve_index_chip_row_omitted_when_no_metadata(tmp_path):
+    """Backwards compat: callers that don't pass metadata get the original
+    name + path layout, not a row of empty/placeholder chips."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    out = _render_serve_index(tmp_path, [project])
+    assert 'class="proj-chips"' not in out
+
+
+def test_render_serve_index_chips_omitted_for_unparseable_bundle(tmp_path):
+    """A bundle that failed to parse (missing from metadata map) falls
+    back to name + path only — chips can't be invented from nothing."""
+    p1 = _make_minimal_bundle(tmp_path, "good")
+    p2 = _make_minimal_bundle(tmp_path, "broken")
+    metadata = {str(p1): _meta()}  # p2 omitted
+    out = _render_serve_index(tmp_path, [p1, p2], metadata=metadata)
+    # Both project cards exist
+    assert 'href="/project/0"' in out
+    assert 'href="/project/1"' in out
+    # Only one chip row gets rendered (the parseable one).
+    assert out.count('class="proj-chips"') == 1
+
+
+def test_render_serve_index_inlines_lucide_svg_icons(tmp_path):
+    """No external requests — icons are inline 24x24 SVG. Lucide stroke
+    style is `stroke="currentColor"` so light/dark mode flips with the
+    palette via CSS."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    metadata = {str(project): _meta()}
+    out = _render_serve_index(tmp_path, [project], metadata=metadata)
+    assert "<svg" in out
+    assert 'stroke="currentColor"' in out
+    # Each chip carries one icon, so we expect at least 5 SVGs (key, BPM,
+    # tracks, size, modified) on a single-card index.
+    assert out.count("<svg") >= 5
+
+
+def test_render_serve_index_relative_time_appears_in_chip(tmp_path):
+    """The modified chip uses the dense relative-time formatter, not an
+    absolute timestamp. The absolute date lives in the title attribute."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    # Modified ~3 weeks ago from any wall clock — too old for hours/days.
+    from datetime import datetime, timedelta
+    mod = (datetime.now() - timedelta(days=22)).isoformat()
+    created = (datetime.now() - timedelta(days=400)).isoformat()
+    metadata = {str(project): _meta(modified_at=mod, created_at=created)}
+    out = _render_serve_index(tmp_path, [project], metadata=metadata)
+    # The card should carry "3w" (or similar) in the chip…
+    panel = out[out.find("proj-chips"):]
+    # 22 days = 3w under our ladder
+    assert "3w" in panel
+    # …and the absolute created date should be reachable via the title attr.
+    assert "title=" in panel
+
+
+def test_render_serve_index_renders_em_dash_for_zero_size(tmp_path):
+    """Defensive: an unknown bundle size renders as `—` rather than `0 B`
+    — keeps the chip honest when metadata is partial."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    metadata = {str(project): _meta(bundle_size_bytes=0)}
+    out = _render_serve_index(tmp_path, [project], metadata=metadata)
+    panel = out[out.find("proj-chips"):]
+    assert "&mdash;" in panel or "—" in panel
+
+
 # --- HTTP handler ---
 
 @pytest.fixture
@@ -179,6 +343,31 @@ def test_serve_api_project_json_returns_full_payload(live_server):
     data = json.loads(body)
     assert "schema_version" in data
     assert "project" in data
+
+
+def test_serve_api_project_json_includes_track_list(live_server):
+    """Regression: the serve handler must read ProjectData and pass it as
+    `raw=` so `track_list` is populated. Without that, the dashboard's
+    Tracks tab shows the empty state for every served project even when
+    the project genuinely has tracks."""
+    status, _, body = _get(live_server, "/api/projects/0")
+    assert status == 200
+    data = json.loads(body)
+    # `track_list` is the registry-derived inventory — must be a list, not
+    # null / missing. (Empty for the minimal fixture, but the key must be
+    # present so the test fixture is *upgradable* — a real project with
+    # tracks would populate it.)
+    assert "track_list" in data
+    assert isinstance(data["track_list"], list)
+
+
+def test_serve_api_project_json_includes_phantom_plugins_field(live_server):
+    """Same regression class: phantom_plugins requires `all_aus` (which
+    requires reading ProjectData). The key must be present in the payload."""
+    status, _, body = _get(live_server, "/api/projects/0")
+    data = json.loads(body)
+    assert "phantom_plugins" in data
+    assert isinstance(data["phantom_plugins"], list)
 
 
 def test_serve_project_404_for_unknown_index(live_server):

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
-__version__ = "0.1.2"
+__version__ = "0.2.0"
 
 # Footer links — used by both the per-project dashboard and the library index.
 _REPO_URL = "https://github.com/rhydlewis/lpx-toolkit"
@@ -822,6 +822,365 @@ def auval_lookup() -> dict[str, str]:
 
 AUVAL_CACHE_PATH = Path.home() / ".cache" / "lpx-toolkit" / "auval.json"
 COMPONENTS_DIR = Path("/Library/Audio/Plug-Ins/Components")
+USER_COMPONENTS_DIR = Path.home() / "Library" / "Audio" / "Plug-Ins" / "Components"
+BUNDLES_CACHE_PATH = Path.home() / ".cache" / "lpx-toolkit" / "au-bundles.json"
+
+# Default codesign command runner — single-bundle, fail-soft. Tests pass a
+# stub so we never shell out from the suite.
+def _default_codesign_runner(bundle_path: Path) -> str:
+    """Run `codesign -dv --verbose=4 <bundle>`, return stderr (where the
+    Authority lines actually appear). Empty string on missing tool / non-zero.
+    """
+    try:
+        proc = subprocess.run(
+            ["codesign", "-dv", "--verbose=4", str(bundle_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    # codesign writes Authority lines to stderr; stdout is usually empty.
+    return proc.stderr or proc.stdout
+
+
+def _decode_au_version(value: str | None) -> str | None:
+    """Some AUs (e.g. Arturia) store the integer-encoded AU API version
+    `(major<<16)|(minor<<8)|patch` directly in CFBundleShortVersionString,
+    rendering as a meaningless big number. If the value is purely numeric
+    and `>= 65536` (= 1.0.0), decode it back to the dotted form.
+    """
+    if not value:
+        return value
+    if not value.isdigit():
+        return value
+    n = int(value)
+    if n < 65536:
+        return value
+    return f"{(n >> 16) & 0xFFFF}.{(n >> 8) & 0xFF}.{n & 0xFF}"
+
+
+def parse_codesign_authority(output: str) -> str | None:
+    """Extract the human-readable signing identity from `codesign -dv` output.
+
+    Recognises:
+      - `Authority=Developer ID Application: <Vendor> (<TeamID>)` → `<Vendor>`
+        (the canonical third-party AU signing format on macOS)
+      - `Authority=Software Signing` (Apple's system-level signing) → `Apple`
+      - No Authority lines → None (unsigned or codesign failed)
+    """
+    leaf: str | None = None
+    for line in output.splitlines():
+        if line.startswith("Authority="):
+            leaf = line[len("Authority="):]
+            break
+    if leaf is None:
+        return None
+    if leaf.startswith("Developer ID Application: "):
+        rest = leaf[len("Developer ID Application: "):]
+        # Strip the trailing "(TEAMID)" suffix.
+        idx = rest.rfind(" (")
+        return rest[:idx] if idx != -1 else rest
+    if leaf == "Software Signing":
+        return "Apple"
+    return leaf
+
+
+def scan_au_bundle(
+    bundle_path: Path,
+    codesign_runner=_default_codesign_runner,
+) -> list[dict]:
+    """Read one .component bundle's Info.plist and return one entry per
+    AudioComponent it registers.
+
+    Each entry: {fingerprint, version, bundle_path, signed_by,
+                 manufacturer_name, plugin_name}.
+
+    Missing Info.plist → []. Codesign-runner exception → signed_by=None.
+    """
+    info_plist = bundle_path / "Contents" / "Info.plist"
+    try:
+        plist = plistlib.loads(info_plist.read_bytes())
+    except (FileNotFoundError, OSError, plistlib.InvalidFileException):
+        return []
+    components = plist.get("AudioComponents", []) or []
+    if not components:
+        return []
+    version = _decode_au_version(
+        plist.get("CFBundleShortVersionString")
+        or plist.get("CFBundleVersion")
+    )
+    try:
+        cs_output = codesign_runner(bundle_path)
+    except Exception:  # noqa: BLE001 — fail-soft per spec
+        signed_by: str | None = None
+    else:
+        signed_by = parse_codesign_authority(cs_output)
+
+    entries: list[dict] = []
+    for c in components:
+        typ = c.get("type")
+        sub = c.get("subtype")
+        mfr = c.get("manufacturer")
+        if not (isinstance(typ, str) and isinstance(sub, str)
+                and isinstance(mfr, str)):
+            continue
+        if not (len(typ) == 4 and len(sub) == 4 and len(mfr) == 4):
+            continue
+        label = c.get("name", "") or ""
+        manufacturer_name, _, plugin_name = label.partition(": ")
+        if not plugin_name:
+            plugin_name = label
+            manufacturer_name = ""
+        entries.append({
+            "fingerprint": f"{typ}/{sub}/{mfr}",
+            "version": version,
+            "bundle_path": str(bundle_path),
+            "signed_by": signed_by,
+            "manufacturer_name": manufacturer_name,
+            "plugin_name": plugin_name,
+        })
+    return entries
+
+
+def scan_au_bundles(
+    components_dirs: list[Path],
+    codesign_runner=_default_codesign_runner,
+) -> dict[str, dict]:
+    """Walk each .component directory and produce a fingerprint→metadata map.
+
+    When the same fingerprint appears in multiple dirs, *later* directories
+    override earlier ones — by convention the user's `~/Library/...` is
+    listed last so a user-installed copy wins over a system copy.
+    """
+    table: dict[str, dict] = {}
+    for d in components_dirs:
+        if not d.exists():
+            continue
+        for bundle in sorted(d.glob("*.component")):
+            for entry in scan_au_bundle(bundle, codesign_runner=codesign_runner):
+                table[entry["fingerprint"]] = entry
+    return table
+
+
+def _components_mtimes(dirs: list[Path]) -> list[float | None]:
+    out: list[float | None] = []
+    for d in dirs:
+        try:
+            out.append(d.stat().st_mtime)
+        except (FileNotFoundError, PermissionError):
+            out.append(None)
+    return out
+
+
+def scan_au_bundles_cached(
+    components_dirs: list[Path] | None = None,
+    codesign_runner=_default_codesign_runner,
+    cache_path: Path = BUNDLES_CACHE_PATH,
+) -> dict[str, dict]:
+    """Cached AU bundle scan. Invalidates when any tracked dir's mtime
+    advances, matching the auval cache convention.
+    """
+    if components_dirs is None:
+        components_dirs = [COMPONENTS_DIR, USER_COMPONENTS_DIR]
+    current_mtimes = _components_mtimes(components_dirs)
+
+    if cache_path.exists():
+        try:
+            payload = json.loads(cache_path.read_text())
+            cached_mtimes = payload.get("mtimes", [])
+            if cached_mtimes == current_mtimes:
+                table = payload.get("table", {})
+                if isinstance(table, dict):
+                    return table
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    fresh = scan_au_bundles(components_dirs, codesign_runner=codesign_runner)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({
+            "mtimes": current_mtimes,
+            "table": fresh,
+        }))
+    except OSError:
+        pass
+    return fresh
+
+
+# ---------------------------------------------------------------------------
+# AU preset counter (#44).
+#
+# Many users keep `.aupreset` files at:
+#   ~/Library/Audio/Presets/<Vendor>/<Plugin>/...
+#   /Library/Audio/Presets/<Vendor>/<Plugin>/...
+# Vendor + plugin names come from the AU bundle's AudioComponents 'name'
+# field ("Toontrack: EZkeys 2") — same convention auval -l uses.
+#
+# Sparse on most Macs (Kontakt/Omnisphere/etc. use proprietary formats).
+# We count what follows the AU `.aupreset` convention; everything else
+# is out of scope.
+# ---------------------------------------------------------------------------
+
+PRESETS_DIRS = [
+    Path.home() / "Library" / "Audio" / "Presets",
+    Path("/Library/Audio/Presets"),
+]
+PRESETS_CACHE_PATH = Path.home() / ".cache" / "lpx-toolkit" / "au-presets.json"
+
+
+def count_au_presets(
+    bundles: dict[str, dict],
+    presets_dirs: list[Path],
+) -> dict[str, int]:
+    """Count `.aupreset` files for each fingerprint in `bundles`.
+
+    Returns {fingerprint: count} for every fingerprint in `bundles`.
+    Looks under `<presets_dir>/<manufacturer_name>/<plugin_name>/**/*.aupreset`
+    across every supplied root, summing matches.
+    """
+    counts: dict[str, int] = {}
+    for fp, meta in bundles.items():
+        vendor = meta.get("manufacturer_name") or ""
+        plugin = meta.get("plugin_name") or ""
+        if not vendor or not plugin:
+            counts[fp] = 0
+            continue
+        total = 0
+        for root in presets_dirs:
+            target = root / vendor / plugin
+            if not target.exists():
+                continue
+            try:
+                total += sum(1 for _ in target.rglob("*.aupreset"))
+            except OSError:
+                continue
+        counts[fp] = total
+    return counts
+
+
+def count_au_presets_cached(
+    bundles: dict[str, dict],
+    presets_dirs: list[Path] | None = None,
+    cache_path: Path = PRESETS_CACHE_PATH,
+) -> dict[str, int]:
+    """Cached preset-count scan.
+
+    Cache key: top-level mtime of each presets directory + the set of
+    fingerprints from `bundles`. Trade-off: dropping a new `.aupreset`
+    deep inside an existing `<Vendor>/<Plugin>/` folder does NOT bump
+    the top-level mtime — to refresh, delete the cache file or add the
+    preset under a new vendor/plugin path.
+    """
+    if presets_dirs is None:
+        presets_dirs = PRESETS_DIRS
+    current_mtimes = _components_mtimes(presets_dirs)
+    fingerprints = sorted(bundles.keys())
+
+    if cache_path.exists():
+        try:
+            payload = json.loads(cache_path.read_text())
+            if (payload.get("mtimes") == current_mtimes
+                    and payload.get("fingerprints") == fingerprints):
+                cached = payload.get("counts", {})
+                if isinstance(cached, dict):
+                    return cached
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    fresh = count_au_presets(bundles, presets_dirs=presets_dirs)
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps({
+            "mtimes": current_mtimes,
+            "fingerprints": fingerprints,
+            "counts": fresh,
+        }))
+    except OSError:
+        pass
+    return fresh
+
+
+# ---------------------------------------------------------------------------
+# Per-project metadata cache for the rollup index (#46).
+#
+# Each `.proj-card` carries chips pulled from `parse_project()`. Parsing
+# 111 bundles every time the index renders would be wasteful; cache the
+# stable subset (key, BPM, dates, size, track count) keyed by the
+# bundle's ProjectData mtime so warm renders skip the parse entirely.
+# ---------------------------------------------------------------------------
+
+INDEX_CACHE_PATH = Path.home() / ".cache" / "lpx-toolkit" / "index.json"
+
+
+def _project_data_mtime(bundle: Path) -> float | None:
+    """Return mtime of `<bundle>/Alternatives/*/ProjectData`, or None when
+    the bundle isn't a valid .logicx layout."""
+    try:
+        alt = next(iter(bundle.glob("Alternatives/*")))
+    except StopIteration:
+        return None
+    try:
+        return (alt / "ProjectData").stat().st_mtime
+    except (FileNotFoundError, PermissionError):
+        return None
+
+
+def _project_to_index_entry(info: "ProjectInfo", mtime: float | None) -> dict:
+    return {
+        "mtime": mtime,
+        "name": info.name,
+        "key": info.key,
+        "gender": info.gender,
+        "bpm": info.bpm,
+        "track_count": info.track_count,
+        "bundle_size_bytes": info.bundle_size_bytes,
+        "created_at": info.created_at.isoformat(),
+        "modified_at": info.modified_at.isoformat(),
+    }
+
+
+def load_index_metadata_cached(
+    bundle_paths: list[Path],
+    cache_path: Path = INDEX_CACHE_PATH,
+) -> dict[str, dict]:
+    """Return {str(path): metadata-dict} for every parseable bundle.
+
+    Re-uses cached entries whose stored `mtime` matches the current
+    `ProjectData` mtime. Bundles that fail to parse are *omitted* from
+    the result — the index handler renders the name + path only for
+    those, never half-parsed chips.
+    """
+    cached: dict[str, dict] = {}
+    if cache_path.exists():
+        try:
+            payload = json.loads(cache_path.read_text())
+            if isinstance(payload, dict):
+                cached = payload
+        except (json.JSONDecodeError, OSError):
+            cached = {}
+
+    out: dict[str, dict] = {}
+    for path in bundle_paths:
+        key = str(path)
+        current_mtime = _project_data_mtime(path)
+        existing = cached.get(key)
+        if (existing is not None
+                and current_mtime is not None
+                and existing.get("mtime") == current_mtime):
+            out[key] = existing
+            continue
+        try:
+            info = parse_project(path)
+        except (FileNotFoundError, KeyError, ValueError, OSError):
+            continue
+        out[key] = _project_to_index_entry(info, current_mtime)
+
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(out))
+    except OSError:
+        pass
+    return out
+
 
 
 def get_components_mtime() -> float | None:
@@ -1536,6 +1895,135 @@ details.vendor-expandable .count {
 }
 .vendor-empty { color: var(--grey); font-style: italic; padding: 4px 0; font-size: 12px; }
 
+/* #42 auval inventory tab — local AU registry cross-referenced against the
+   project. The banner is the headline (missing-plugin pre-flight); the
+   table beneath is the full installed list with a ✓ for in-project use. */
+.inv-banner {
+  display: flex; align-items: flex-start; gap: 14px;
+  border: 1px solid var(--warn-d); background: rgba(255, 93, 85, 0.08);
+  border-radius: 8px; padding: 14px 16px; margin: 0 0 18px;
+  color: var(--bone);
+}
+:root[data-theme="light"] .inv-banner { background: rgba(184, 38, 30, 0.07); }
+.inv-banner-icon {
+  flex: 0 0 auto; width: 24px; height: 24px;
+  border-radius: 50%; background: var(--warn);
+  color: var(--ink); font-weight: 700;
+  font-family: var(--font-mono); font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  margin-top: 1px;
+}
+.inv-banner-body { flex: 1 1 auto; min-width: 0; }
+.inv-banner-title {
+  font-family: var(--font-text); font-weight: 600;
+  font-size: 13px; color: var(--bone); margin: 0 0 6px;
+}
+.inv-banner-title b {
+  color: var(--warn); font-variant-numeric: tabular-nums;
+  margin-right: 4px;
+}
+.inv-banner-list {
+  margin: 0; padding: 0; list-style: none;
+  font-size: 12px; color: var(--bone-dim);
+}
+.inv-banner-list li {
+  padding: 2px 0;
+  display: flex; gap: 10px; align-items: baseline;
+  flex-wrap: wrap;
+}
+.inv-banner-list .name { font-weight: 500; }
+.inv-banner-list .fp {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--grey-2);
+}
+
+.inv-table {
+  border: 1px solid var(--line);
+  border-radius: 8px; overflow: hidden;
+  background: var(--ink-2);
+}
+.inv-head, .inv-row {
+  display: grid;
+  grid-template-columns: 24px 1.7fr 0.5fr 0.65fr 1.2fr 56px 1.2fr;
+  gap: 14px; padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  align-items: center; font-size: 13px;
+}
+.inv-row:last-child { border-bottom: none; }
+.inv-head {
+  background: var(--ink-3);
+  color: var(--grey); font-weight: 600;
+  font-size: 10px; text-transform: uppercase; letter-spacing: .12em;
+}
+.inv-row .inv-tick {
+  font-family: var(--font-mono); font-size: 13px;
+  color: var(--grey-2); text-align: center;
+}
+.inv-row.used {
+  background: rgba(110, 231, 183, 0.10);
+  box-shadow: inset 3px 0 0 var(--phosphor);
+}
+:root[data-theme="light"] .inv-row.used {
+  background: rgba(31, 125, 86, 0.09);
+}
+.inv-row.used .inv-tick {
+  color: var(--phosphor);
+  font-size: 15px; font-weight: 700;
+}
+.inv-row.unused { color: var(--grey); }
+.inv-row.unused .name { color: var(--bone-dim); }
+.inv-row.used .name { color: var(--bone); font-weight: 600; }
+.inv-row .name { word-break: break-word; }
+.inv-row .vendor {
+  color: var(--bone-dim); font-size: 12px;
+  word-break: break-word;
+}
+.inv-row.unused .vendor { color: var(--grey); }
+.inv-row .type-pill {
+  display: inline-block;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: .04em;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--ink-3); color: var(--bone-dim);
+  border: 1px solid var(--line);
+}
+.inv-row .fingerprint {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--grey); white-space: pre;
+  overflow: hidden; text-overflow: ellipsis;
+  user-select: all; cursor: text;
+}
+.inv-row .name-cell .vendor-sub {
+  display: block; color: var(--grey);
+  font-size: 11px; margin-top: 2px;
+  word-break: break-word;
+}
+.inv-row.unused .name-cell .vendor-sub { color: var(--grey-2); }
+.inv-row .version {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--bone-dim); font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.inv-row.unused .version { color: var(--grey-2); }
+.inv-row .signed-by {
+  font-size: 12px; color: var(--bone-dim);
+  word-break: break-word;
+}
+.inv-row.unused .signed-by { color: var(--grey); }
+.inv-row .signed-by.unsigned {
+  color: var(--warn); font-style: italic;
+}
+.inv-row .presets {
+  font-family: var(--font-mono); font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--bone-dim); text-align: right;
+}
+.inv-row .presets.zero { color: var(--grey-2); }
+.inv-row.unused .presets { color: var(--grey-2); }
+.inv-row .em-dash {
+  color: var(--grey-2); font-family: var(--font-mono);
+}
+
 /* Reveal-in-Finder button — sits in the topbar next to the theme toggle */
 a.open-btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1561,11 +2049,89 @@ def _e(s) -> str:
 def _fmt_size(n: int) -> str:
     """Bytes → human-friendly size."""
     n = int(n or 0)
+    if n >= 1024 * 1024 * 1024:
+        return f"{n / 1024 / 1024 / 1024:.1f} GB"
     if n >= 1024 * 1024:
         return f"{n / 1024 / 1024:.1f} MB"
     if n >= 1024:
         return f"{n / 1024:.1f} KB"
     return f"{n} B"
+
+
+# Inline 24x24 Lucide icons for the proj-card chips (#46). Source paths
+# copied verbatim from lucide.dev — currentColor lets dark/light mode
+# inherit the parent text colour. Stroke width tuned to 2 in CSS.
+_LUCIDE = {
+    "history": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>'
+        '<path d="M3 3v5h5"/>'
+        '<path d="M12 7v5l4 2"/>'
+        '</svg>'
+    ),
+    "music": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="M9 18V5l12-2v13"/>'
+        '<circle cx="6" cy="18" r="3"/>'
+        '<circle cx="18" cy="16" r="3"/>'
+        '</svg>'
+    ),
+    "gauge": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="m12 14 4-4"/>'
+        '<path d="M3.34 19a10 10 0 1 1 17.32 0"/>'
+        '</svg>'
+    ),
+    "layers": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 '
+        '3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/>'
+        '<path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9'
+        'A1 1 0 0 0 22 12"/>'
+        '<path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9'
+        'A1 1 0 0 0 22 17"/>'
+        '</svg>'
+    ),
+    "hard-drive": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<line x1="22" x2="2" y1="12" y2="12"/>'
+        '<path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6'
+        'l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'
+        '<line x1="6" x2="6.01" y1="16" y2="16"/>'
+        '<line x1="10" x2="10.01" y1="16" y2="16"/>'
+        '</svg>'
+    ),
+}
+
+
+def _relative_time(then: datetime, now: datetime | None = None) -> str:
+    """Dense, scannable "time since" formatter for the rollup chips.
+
+    Ladder: just now (<60s) → Nm → Nh → Nd (<14) → Nw (<8) → "Mon 'YY".
+    Future timestamps fall through as "just now" rather than producing
+    negative output (ProjectData mtimes can drift if a system clock was
+    rolled back).
+    """
+    now = now or datetime.now()
+    delta = (now - then).total_seconds()
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h"
+    days = int(delta // 86400)
+    if days < 14:
+        return f"{days}d"
+    weeks = days // 7
+    if weeks < 8:
+        return f"{weeks}w"
+    return f"{then.strftime('%b')} '{then.strftime('%y')}"
 
 
 def _render_metadata_sheet(p: dict) -> str:
@@ -1887,6 +2453,114 @@ def _render_diagnostics(warnings: list[dict]) -> str:
     return "".join(parts)
 
 
+def _render_inventory_panel(inventory: dict) -> str:
+    """Render the #42 auval inventory tab body.
+
+    Layout:
+      - Banner (only when unresolved fingerprints > 0): "N plug-ins this
+        project references are NOT in your local AU registry" — the
+        missing-plugin pre-flight signal.
+      - Table: every installed AU with a ✓ / — column for in-project use.
+
+    When entries and unresolved are both empty, returns an empty-state
+    block (the user's auval registry is unavailable on this machine).
+    """
+    entries = inventory.get("entries", []) or []
+    unresolved = inventory.get("unresolved", []) or []
+
+    if not entries and not unresolved:
+        return (
+            '<div class="tab-empty">'
+            'No AU registry available — install plug-ins or run '
+            '<code>auval -l</code> to populate the inventory.'
+            '</div>'
+        )
+
+    parts: list[str] = []
+
+    if unresolved:
+        n = len(unresolved)
+        plural = "s" if n != 1 else ""
+        parts.append(
+            f'<div class="inv-banner" role="alert">'
+            f'<div class="inv-banner-icon" aria-hidden="true">!</div>'
+            f'<div class="inv-banner-body">'
+            f'<div class="inv-banner-title">'
+            f'<b>{n}</b>plug-in{plural} this project references '
+            f'{"are" if n != 1 else "is"} NOT in your local AU registry.'
+            f'</div>'
+            f'<ul class="inv-banner-list">'
+        )
+        for u in unresolved:
+            display = _e(u.get("display_name") or u.get("fingerprint", ""))
+            fp = _e(u.get("fingerprint", ""))
+            parts.append(
+                f'<li>'
+                f'<span class="name">{display}</span>'
+                f'<span class="fp">{fp}</span>'
+                f'</li>'
+            )
+        parts.append('</ul></div></div>')
+
+    if entries:
+        parts.append(
+            '<div class="inv-table">'
+            '<div class="inv-head">'
+            '<div></div>'
+            '<div>Plug-in</div>'
+            '<div>Type</div>'
+            '<div>Version</div>'
+            '<div>Signed by</div>'
+            '<div style="text-align:right">Presets</div>'
+            '<div>Fingerprint</div>'
+            '</div>'
+        )
+        for entry in entries:
+            used = bool(entry.get("used_in_project"))
+            row_cls = "inv-row used" if used else "inv-row unused"
+            tick = "&check;" if used else "&mdash;"
+            name = _e(entry.get("name") or entry.get("fingerprint", ""))
+            vendor = _e(entry.get("manufacturer") or
+                        entry.get("manufacturer_4cc", ""))
+            typ = _e(entry.get("type", ""))
+            fp = _e(entry.get("fingerprint", ""))
+            version = entry.get("version")
+            version_html = (
+                f'<span class="version">{_e(version)}</span>'
+                if version else '<span class="em-dash">&mdash;</span>'
+            )
+            signed_by = entry.get("signed_by")
+            signed_html = (
+                f'<span class="signed-by">{_e(signed_by)}</span>'
+                if signed_by else '<span class="em-dash">&mdash;</span>'
+            )
+            presets = int(entry.get("preset_count") or 0)
+            presets_cls = "presets" if presets else "presets zero"
+            presets_html = (
+                f'<span class="{presets_cls}">{presets}</span>'
+                if presets
+                else '<span class="em-dash">&mdash;</span>'
+            )
+            parts.append(
+                f'<div class="{row_cls}" title="{fp}">'
+                f'<div class="inv-tick" aria-label='
+                f'"{"used" if used else "unused"}">{tick}</div>'
+                f'<div class="name-cell">'
+                f'<span class="name">{name}</span>'
+                f'<span class="vendor-sub">{vendor}</span>'
+                f'</div>'
+                f'<div><span class="type-pill">{typ}</span></div>'
+                f'<div>{version_html}</div>'
+                f'<div>{signed_html}</div>'
+                f'<div>{presets_html}</div>'
+                f'<div class="fingerprint">{fp}</div>'
+                f'</div>'
+            )
+        parts.append('</div>')
+
+    return "".join(parts)
+
+
 def _render_footer(suffix: str = "") -> str:
     """Shared footer for both the per-project dashboard and the library
     index. `suffix` lets the caller append a context label (e.g.
@@ -1995,14 +2669,24 @@ def render_project_html(
     n_tracks = len(payload.get("track_list", []))
     n_plugin_chains = len(payload.get("tracks", []))
     n_diag = len(payload.get("diagnostics", [])) + len(payload.get("phantom_plugins", []))
+    inventory = payload.get("auval_inventory")
+    has_inventory = inventory is not None
+    n_inventory = len(inventory.get("entries", []) or []) if has_inventory else 0
 
     def _count_pill(n: int) -> str:
         return f'<span class="count">{int(n)}</span>' if n else ''
+
+    inventory_tab_html = (
+        f'<button class="tab" data-tab="inventory" type="button">'
+        f'Inventory{_count_pill(n_inventory)}</button>'
+        if has_inventory else ''
+    )
 
     tabs_html = (
         '<div class="tabs" role="tablist">'
         f'<button class="tab active" data-tab="tracks" type="button">Tracks{_count_pill(n_tracks)}</button>'
         f'<button class="tab" data-tab="plugins" type="button">Plugin chains{_count_pill(n_plugin_chains)}</button>'
+        f'{inventory_tab_html}'
         f'<button class="tab" data-tab="diagnostics" type="button">Diagnostics{_count_pill(n_diag)}</button>'
         '</div>'
     )
@@ -2016,6 +2700,12 @@ def render_project_html(
         '<div class="tab-panel hidden" data-panel="plugins">'
         + (tracks_html or '<div class="tab-empty">No active plugin chains in this project.</div>')
         + '</div>'
+    )
+    inventory_panel = (
+        f'<div class="tab-panel hidden" data-panel="inventory">'
+        f'{_render_inventory_panel(inventory)}'
+        f'</div>'
+        if has_inventory else ''
     )
     diagnostics_blocks = []
     if phantoms_html:
@@ -2071,6 +2761,7 @@ def render_project_html(
         f'{tabs_html}'
         f'{tracks_panel}'
         f'{plugins_panel}'
+        f'{inventory_panel}'
         f'{diagnostics_panel}'
         f'</section>'
         f'</div>'
@@ -2089,6 +2780,111 @@ KLOPFGEIST_FINGERPRINT = "aumu/klop/appl"
 def is_metronome_au(au: AURef) -> bool:
     """True if the AU is Logic's built-in metronome."""
     return au.fingerprint == KLOPFGEIST_FINGERPRINT
+
+
+# Humanised AU type labels. The 4CCs themselves are unfriendly to read at
+# the speed of a glance; this mapping is what surfaces in the inventory tab.
+_AU_TYPE_LABELS = {
+    "aumu": "Instrument",
+    "aufx": "Effect",
+    "aumf": "MIDI FX",
+}
+
+
+def _split_auval_label(label: str) -> tuple[str, str]:
+    """Split a 'Manufacturer: Plugin' label. Returns ("", label) if no colon."""
+    if ": " in label:
+        vendor, _, name = label.partition(": ")
+        return vendor, name
+    return "", label
+
+
+def inventory_for_project(
+    lookup: dict[str, str],
+    payload: dict,
+    bundles: dict[str, dict] | None = None,
+    presets: dict[str, int] | None = None,
+) -> dict:
+    """Cross-reference the local AU registry against this project's plugin use.
+
+    `lookup` is the auval `fingerprint → "Vendor: Plugin"` table. Optional
+    `bundles` (from #43 `scan_au_bundles_cached`) adds version + signed_by
+    per fingerprint; optional `presets` (from #44 `count_au_presets_cached`)
+    adds preset_count.
+
+    Returns:
+        {
+            "entries": [
+                {fingerprint, name, manufacturer, type,
+                 type_4cc, subtype_4cc, manufacturer_4cc, used_in_project,
+                 version, signed_by, preset_count}
+            ],  # used rows first, then alphabetical (manufacturer, name)
+            "unresolved": [
+                {fingerprint, display_name,
+                 type_4cc, subtype_4cc, manufacturer_4cc}
+            ],  # project plugins missing from the local registry, deduped
+        }
+    """
+    bundles = bundles or {}
+    presets = presets or {}
+
+    used_fingerprints: set[str] = set()
+    unresolved_by_fp: dict[str, dict] = {}
+    for track in payload.get("tracks", []):
+        slots = [track.get("instrument")] + list(track.get("midi_fx") or []) + \
+                list(track.get("audio_fx") or [])
+        for au in slots:
+            if au is None:
+                continue
+            fp = au.get("fingerprint")
+            if not fp:
+                continue
+            used_fingerprints.add(fp)
+            if fp not in lookup and fp not in unresolved_by_fp:
+                unresolved_by_fp[fp] = {
+                    "fingerprint": fp,
+                    "display_name": au.get("display_name") or "",
+                    "type_4cc": au.get("type_code", ""),
+                    "subtype_4cc": au.get("subtype", ""),
+                    "manufacturer_4cc": au.get("manufacturer", ""),
+                }
+
+    entries: list[dict] = []
+    for fp, label in lookup.items():
+        try:
+            typ, sub, mfr_4cc = fp.split("/")
+        except ValueError:
+            continue
+        vendor, name = _split_auval_label(label)
+        if not vendor:
+            vendor = mfr_4cc
+        bundle = bundles.get(fp) or {}
+        entries.append({
+            "fingerprint": fp,
+            "name": name,
+            "manufacturer": vendor,
+            "type": _AU_TYPE_LABELS.get(typ, typ),
+            "type_4cc": typ,
+            "subtype_4cc": sub,
+            "manufacturer_4cc": mfr_4cc,
+            "used_in_project": fp in used_fingerprints,
+            "version": bundle.get("version"),
+            "signed_by": bundle.get("signed_by"),
+            "preset_count": int(presets.get(fp, 0)),
+        })
+    entries.sort(key=lambda e: (
+        not e["used_in_project"],          # used rows first
+        e["manufacturer"].casefold(),
+        e["name"].casefold(),
+    ))
+
+    return {
+        "entries": entries,
+        "unresolved": sorted(
+            unresolved_by_fp.values(),
+            key=lambda u: u["fingerprint"],
+        ),
+    }
 
 
 # Length threshold for the "truncated name" diagnostic. Logic clips to
@@ -2260,6 +3056,8 @@ def project_to_json(
     lookup: dict[str, str],
     raw: bytes | None = None,
     all_aus: list[AURef] | None = None,
+    bundles: dict[str, dict] | None = None,
+    presets: dict[str, int] | None = None,
 ) -> str:
     """Serialise project state to a stable JSON wire format.
 
@@ -2323,6 +3121,9 @@ def project_to_json(
         "diagnostics": diagnostics,
         "phantom_plugins": phantoms_dicts,
     }
+    payload["auval_inventory"] = inventory_for_project(
+        lookup, payload, bundles=bundles, presets=presets,
+    )
     return json.dumps(payload, indent=2, ensure_ascii=False)
 
 
@@ -2409,16 +3210,26 @@ def main(
     raw = (alt / "ProjectData").read_bytes()
     info = parse_project(Path(path))
     lookup = auval_lookup_cached()
+    bundles = scan_au_bundles_cached() if (as_json or as_html) else None
+    presets = (
+        count_au_presets_cached(bundles) if bundles else None
+    )
 
     all_aus = deduplicate(find_aus(raw))
 
     if as_json:
-        print(project_to_json(info, lookup, raw=raw, all_aus=all_aus))
+        print(project_to_json(
+            info, lookup, raw=raw, all_aus=all_aus,
+            bundles=bundles, presets=presets,
+        ))
         return
 
     if as_html:
         import tempfile
-        payload = json.loads(project_to_json(info, lookup, raw=raw, all_aus=all_aus))
+        payload = json.loads(project_to_json(
+            info, lookup, raw=raw, all_aus=all_aus,
+            bundles=bundles, presets=presets,
+        ))
         absolute_path = str(Path(path).resolve())
         html_doc = render_project_html(
             payload,
@@ -2643,6 +3454,69 @@ a.proj-card:hover {
   text-align: center;
   color: var(--grey); font-size: 13px; letter-spacing: .04em;
 }
+
+/* #45 quick filter / search bar at the top of the index */
+.proj-search-bar {
+  display: flex; align-items: center; gap: 14px;
+  max-width: 1400px; margin: 0 auto 18px;
+}
+.proj-search {
+  flex: 1 1 auto;
+  font-family: var(--font-text);
+  font-size: 14px; line-height: 1.4;
+  color: var(--bone); background: var(--ink-2);
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 14px;
+  transition: border-color .15s, background-color .15s;
+  -webkit-appearance: none; appearance: none;
+}
+.proj-search::placeholder { color: var(--grey-2); }
+.proj-search:focus {
+  outline: none; border-color: var(--amber);
+  background: var(--ink-3);
+}
+.proj-count {
+  font-family: var(--font-mono);
+  font-size: 11px; letter-spacing: .04em;
+  color: var(--grey); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.proj-card.hidden { display: none; }
+.proj-no-match {
+  display: none;
+  border: 1px dashed var(--line); padding: 22px 28px;
+  border-radius: 10px; text-align: center;
+  color: var(--grey); font-size: 13px;
+  margin: 0 auto; max-width: 1400px;
+}
+.proj-no-match.show { display: block; }
+
+/* #46 metadata chips beneath the path on each .proj-card */
+.proj-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 12px;
+}
+.proj-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-text);
+  font-size: 11px; font-weight: 500;
+  letter-spacing: -0.005em;
+  color: var(--bone-dim); background: var(--ink-3);
+  border: 1px solid var(--line);
+  padding: 3px 8px; border-radius: 999px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+:root[data-theme="light"] .proj-chip {
+  color: var(--bone-dim); background: var(--ink-4);
+}
+.proj-chip svg {
+  width: 12px; height: 12px;
+  stroke-width: 2; flex-shrink: 0;
+  color: var(--grey);
+}
+.proj-chip.muted { color: var(--grey); }
+.proj-chip.muted svg { color: var(--grey-2); }
 """
 
 
@@ -2707,11 +3581,88 @@ def _list_projects(directory: Path) -> list[Path]:
     )
 
 
-def _render_serve_index(label, projects: list[Path]) -> str:
+def _render_proj_chips(meta: dict | None) -> str:
+    """Tight chip row for a `proj-card` (#46).
+
+    Order: musical (key, BPM) → scale (tracks, size) → recency (modified).
+    The created date lives in the modified chip's `title=` for hover.
+    Falsy / missing fields render `—` with a `.muted` class so unknown
+    metadata never poses as real data.
+    """
+    if not meta:
+        return ""
+
+    def _chip(icon: str, text: str, *, muted: bool = False,
+              title: str | None = None) -> str:
+        cls = "proj-chip muted" if muted else "proj-chip"
+        title_attr = f' title="{_e(title)}"' if title else ""
+        return (f'<span class="{cls}"{title_attr}>'
+                f'{_LUCIDE[icon]}{_e(text)}</span>')
+
+    parts: list[str] = []
+
+    # Musical: key + gender
+    key = meta.get("key") or ""
+    gender = meta.get("gender") or ""
+    key_text = f"{key} {gender}".strip() if (key or gender) else "—"
+    parts.append(_chip("music", key_text or "—",
+                       muted=not (key or gender)))
+
+    # BPM
+    bpm = meta.get("bpm") or 0
+    bpm_text = f"{int(round(bpm))}" if bpm else "—"
+    parts.append(_chip("gauge", bpm_text, muted=not bpm))
+
+    # Track count
+    tc = meta.get("track_count") or 0
+    tc_text = f"{int(tc)}" if tc else "—"
+    parts.append(_chip("layers", tc_text, muted=not tc))
+
+    # Bundle size
+    size = int(meta.get("bundle_size_bytes") or 0)
+    size_text = _fmt_size(size) if size else "—"
+    parts.append(_chip("hard-drive", size_text, muted=not size))
+
+    # Modified time + created tooltip
+    modified_iso = meta.get("modified_at")
+    created_iso = meta.get("created_at")
+    rel = "—"
+    title_str: str | None = None
+    if modified_iso:
+        try:
+            mod_dt = datetime.fromisoformat(modified_iso)
+            rel = _relative_time(mod_dt)
+        except ValueError:
+            rel = "—"
+        if created_iso:
+            try:
+                created_dt = datetime.fromisoformat(created_iso)
+                title_str = (f"Created {created_dt.strftime('%b %d, %Y')}"
+                             f" · Modified {datetime.fromisoformat(modified_iso).strftime('%b %d, %Y')}")
+            except ValueError:
+                title_str = None
+    parts.append(_chip("history", rel,
+                       muted=(rel == "—"),
+                       title=title_str))
+
+    return f'<div class="proj-chips">{"".join(parts)}</div>'
+
+
+def _render_serve_index(
+    label,
+    projects: list[Path],
+    metadata: dict[str, dict] | None = None,
+) -> str:
     """HTML for the / route — clickable list of projects.
 
     `label` is shown in the header (a directory path for `--serve`,
     a "rollup of N projects" string for `--rollup`). Accepts Path or str.
+
+    Optional `metadata` (from `load_index_metadata_cached`) decorates each
+    `.proj-card` with a chip row (key, BPM, tracks, size, modified). When
+    omitted, cards fall back to name + path only — preserves the
+    pre-#46 layout for callers (e.g. `--rollup` HTML) that haven't been
+    upgraded to pass metadata.
 
     Reuses _HTML_STYLE so the index inherits the dashboard's typography
     and theme variables; the theme toggle is wired up the same way.
@@ -2740,14 +3691,24 @@ def _render_serve_index(label, projects: list[Path]) -> str:
     )
 
     if projects:
-        cards = "".join(
-            f'<a class="proj-card" href="/project/{i}">'
-            f'<div class="proj-name">{_e(p.stem)}</div>'
-            f'<div class="proj-path">{_e(str(p))}</div>'
-            f'</a>'
-            for i, p in enumerate(projects)
+        meta_lookup = metadata or {}
+
+        def _card(i: int, p: Path) -> str:
+            chip_row = _render_proj_chips(meta_lookup.get(str(p)))
+            return (
+                f'<a class="proj-card" href="/project/{i}" '
+                f'data-search="{_e(p.stem.lower())}">'
+                f'<div class="proj-name">{_e(p.stem)}</div>'
+                f'<div class="proj-path">{_e(str(p))}</div>'
+                f'{chip_row}'
+                f'</a>'
+            )
+        cards = "".join(_card(i, p) for i, p in enumerate(projects))
+        body = (
+            f'<div class="proj-grid">{cards}</div>'
+            f'<div class="proj-no-match" id="proj-no-match">'
+            f'No projects match.</div>'
         )
-        body = f'<div class="proj-grid">{cards}</div>'
     else:
         body = (
             '<div class="proj-empty">'
@@ -2765,6 +3726,70 @@ def _render_serve_index(label, projects: list[Path]) -> str:
         if label else ''
     )
 
+    n = len(projects)
+    plural = "s" if n != 1 else ""
+    search_bar = (
+        f'<div class="proj-search-bar">'
+        f'<input id="proj-search" class="proj-search" type="search" '
+        f'placeholder="Filter {n} project{plural}…  (press / to focus)" '
+        f'aria-label="Filter projects by name" autocomplete="off" '
+        f'spellcheck="false" />'
+        f'<span class="proj-count" id="proj-count">'
+        f'{n} project{plural}</span>'
+        f'</div>'
+    ) if projects else ''
+
+    filter_script = (
+        '<script>(function(){'
+        # Wire only when the input + cards exist (empty index has neither).
+        "var input=document.getElementById('proj-search');"
+        "if(!input)return;"
+        "var cards=document.querySelectorAll('.proj-card');"
+        "var counter=document.getElementById('proj-count');"
+        "var noMatch=document.getElementById('proj-no-match');"
+        "var total=cards.length;"
+        "function plural(n){return n===1?' project':' projects';}"
+        "function apply(q){"
+        "var needle=(q||'').trim().toLowerCase();"
+        "var shown=0;"
+        "cards.forEach(function(c){"
+        "var hay=c.getAttribute('data-search')||'';"
+        "var hit=needle===''||hay.indexOf(needle)!==-1;"
+        "c.classList.toggle('hidden',!hit);"
+        "if(hit)shown++;"
+        "});"
+        "if(counter){"
+        "counter.textContent=needle?"
+        "('Showing '+shown+' of '+total):"
+        "(total+plural(total));"
+        "}"
+        "if(noMatch)noMatch.classList.toggle('show',shown===0&&total>0);"
+        "}"
+        # Restore last query — same persistence pattern as theme/tab.
+        "try{var saved=localStorage.getItem('lpxtool-search')||'';"
+        "if(saved){input.value=saved;apply(saved);}}catch(e){}"
+        "input.addEventListener('input',function(){"
+        "var v=input.value;apply(v);"
+        "try{localStorage.setItem('lpxtool-search',v);}catch(e){}"
+        "});"
+        # Esc clears, `/` from anywhere focuses the input (GitHub-style).
+        "input.addEventListener('keydown',function(e){"
+        "if(e.key==='Escape'){input.value='';apply('');"
+        "try{localStorage.setItem('lpxtool-search','');}catch(_){}"
+        "input.blur();}"
+        "});"
+        "document.addEventListener('keydown',function(e){"
+        "if(e.key!=='/')return;"
+        "var t=e.target;var tag=(t&&t.tagName)||'';"
+        "if(tag==='INPUT'||tag==='TEXTAREA'||"
+        "(t&&t.isContentEditable))return;"
+        "e.preventDefault();input.focus();input.select();"
+        "});"
+        # Focus on load so the user can start typing immediately.
+        "setTimeout(function(){input.focus();},0);"
+        '})();</script>'
+    ) if projects else ''
+
     return (
         '<!doctype html>\n<html lang="en"><head>'
         '<meta charset="utf-8" />'
@@ -2778,9 +3803,11 @@ def _render_serve_index(label, projects: list[Path]) -> str:
         f'<p class="h-sub">{label_html}'
         f'{len(projects)} project{"s" if len(projects) != 1 else ""}</p>'
         f'{rollup_link}'
+        f'{search_bar}'
         f'{body}'
         f'{_render_footer(suffix="serving locally")}'
         f'{toggle_script}'
+        f'{filter_script}'
         '</body></html>\n'
     )
 
@@ -2817,6 +3844,7 @@ def _render_rollup_html(
     lookup: dict[str, str] | None = None,
     *,
     label: str = "",
+    metadata: dict[str, dict] | None = None,
 ) -> str:
     """Browseable rollup dashboard. Top plugins by project count, top
     manufacturers by total plugins, clickable project list.
@@ -2902,12 +3930,16 @@ def _render_rollup_html(
         )
 
     # Clickable project cards. Match summary by name where possible.
+    # Decorate each card with the same chip row used by the serve index
+    # (#46) when metadata is supplied.
     summary_by_name = {s.get("name"): s for s in project_summaries}
+    meta_lookup = metadata or {}
     project_cards = []
     for i, p in enumerate(project_paths):
         summary = summary_by_name.get(p.stem) or {}
         plugin_count = summary.get("plugin_count", 0)
         unique = summary.get("unique_fingerprints", 0)
+        chip_row = _render_proj_chips(meta_lookup.get(str(p)))
         project_cards.append(
             f'<a class="proj-card" href="/project/{i}">'
             f'<div class="proj-name">{_e(p.stem)}</div>'
@@ -2915,6 +3947,7 @@ def _render_rollup_html(
             f'{plugin_count} plug-in{"s" if plugin_count != 1 else ""}'
             f' · {unique} unique'
             f'</div>'
+            f'{chip_row}'
             f'</a>'
         )
 
@@ -3009,14 +4042,22 @@ def make_serve_handler(project_provider, *, label: str = ""):
 
             if route == "/":
                 projects = project_provider()
-                self._send(200, "text/html", _render_serve_index(label, projects))
+                metadata = load_index_metadata_cached(projects)
+                self._send(
+                    200, "text/html",
+                    _render_serve_index(label, projects, metadata=metadata),
+                )
                 return
 
             if route == "/rollup":
                 projects = project_provider()
                 lookup = auval_lookup_cached()
                 rollup = rollup_projects(projects, lookup)
-                html = _render_rollup_html(rollup, projects, lookup, label=label)
+                metadata = load_index_metadata_cached(projects)
+                html = _render_rollup_html(
+                    rollup, projects, lookup,
+                    label=label, metadata=metadata,
+                )
                 self._send(200, "text/html", html)
                 return
 
@@ -3044,8 +4085,17 @@ def make_serve_handler(project_provider, *, label: str = ""):
                     project_path = projects[idx]
                     try:
                         lookup = auval_lookup_cached()
+                        bundles = scan_au_bundles_cached()
+                        presets = count_au_presets_cached(bundles)
                         info = parse_project(project_path)
-                        payload = json.loads(project_to_json(info, lookup=lookup))
+                        alt = next(project_path.glob("Alternatives/*"))
+                        raw = (alt / "ProjectData").read_bytes()
+                        all_aus = deduplicate(find_aus(raw))
+                        payload = json.loads(project_to_json(
+                            info, lookup=lookup,
+                            raw=raw, all_aus=all_aus,
+                            bundles=bundles, presets=presets,
+                        ))
                         html = render_project_html(
                             payload, lookup=lookup, project_path=str(project_path)
                         )
@@ -3068,8 +4118,17 @@ def make_serve_handler(project_provider, *, label: str = ""):
                     project_path = projects[idx]
                     try:
                         lookup = auval_lookup_cached()
+                        bundles = scan_au_bundles_cached()
+                        presets = count_au_presets_cached(bundles)
                         info = parse_project(project_path)
-                        body = project_to_json(info, lookup=lookup)
+                        alt = next(project_path.glob("Alternatives/*"))
+                        raw = (alt / "ProjectData").read_bytes()
+                        all_aus = deduplicate(find_aus(raw))
+                        body = project_to_json(
+                            info, lookup=lookup,
+                            raw=raw, all_aus=all_aus,
+                            bundles=bundles, presets=presets,
+                        )
                     except (FileNotFoundError, KeyError, ValueError) as exc:
                         self._send(
                             500, "application/json",

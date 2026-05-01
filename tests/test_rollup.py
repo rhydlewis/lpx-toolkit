@@ -80,3 +80,49 @@ def test_rollup_aggregates_fingerprints_and_vendors_with_counts():
     assert result["vendors"]["Toon"] == 3  # 2 + 1
     assert result["vendors"]["SToy"] == 1
     assert result["vendors"]["Bgrn"] == 1
+
+
+# --- /rollup HTML — chip parity with the serve index (#46 follow-up) ---
+
+
+def test_rollup_html_renders_chip_row_when_metadata_provided(tmp_path):
+    """The /rollup HTML view shows the same chip set as the serve index
+    on each project card — no visual divergence between the two surfaces."""
+    from lpx_inspect import _render_rollup_html
+    p1 = _make_minimal_bundle(tmp_path, "alpha")
+    rollup = {
+        "projects": [{"name": "alpha", "plugin_count": 3,
+                      "unique_fingerprints": 3}],
+        "fingerprints": {}, "vendors": {},
+    }
+    metadata = {str(p1): {
+        "mtime": 1.0,
+        "name": "alpha",
+        "key": "F#", "gender": "minor",
+        "bpm": 92.0,
+        "track_count": 14,
+        "bundle_size_bytes": 64 * 1024 * 1024,
+        "created_at": "2024-01-01T00:00:00",
+        "modified_at": "2026-04-25T00:00:00",
+    }}
+    out = _render_rollup_html(rollup, [p1], metadata=metadata)
+    assert 'class="proj-chips"' in out
+    # All five chip values present in the card row.
+    assert "F# minor" in out
+    assert "92" in out
+    assert "14" in out
+    assert "MB" in out
+
+
+def test_rollup_html_omits_chips_when_metadata_absent(tmp_path):
+    """Backwards compat: callers that don't supply metadata get the
+    pre-#46 layout — name + summary line only, no chip row."""
+    from lpx_inspect import _render_rollup_html
+    p1 = _make_minimal_bundle(tmp_path, "alpha")
+    rollup = {
+        "projects": [{"name": "alpha", "plugin_count": 0,
+                      "unique_fingerprints": 0}],
+        "fingerprints": {}, "vendors": {},
+    }
+    out = _render_rollup_html(rollup, [p1])
+    assert 'class="proj-chips"' not in out

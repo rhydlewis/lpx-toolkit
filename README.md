@@ -31,7 +31,8 @@ Tracks:         3
 
 ## Why you might want this
 
-- **"Which plugins does this project need?"** Before opening a project on a new machine, see the full plugin manifest up front.
+- **"Will this project open cleanly on this Mac?"** The Inventory tab cross-references the project's plug-ins against your local AU registry. Missing plug-ins surface in a banner at the top before you ever launch Logic; every installed plug-in shows its version and signing authority.
+- **"Which plugins does this project need?"** See the full plugin manifest up front.
 - **"Which of my installed plugins do I actually use?"** Run `--rollup` across your whole library to find out.
 - **"What's in this project file?"** Inspect tempo, key, track list, and FX chains for any project — even ones you can't open because a plugin is missing.
 - **Scripting and automation.** Pipe `--json` into other tools, generate reports, audit project archives.
@@ -102,7 +103,14 @@ Run `lpxtool --help` for the full flag list.
 
 ### HTML dashboard
 
-`--html` produces a single self-contained HTML file with project metadata, the track list, FX chains, a vendor rollup, and any "phantom" plugins still referenced from undo history. The file lands in `$TMPDIR/lpx-toolkit-<slug>.html` and opens in your default browser.
+`--html` produces a single self-contained HTML file with four tabs:
+
+- **Tracks** — the registry-derived canonical track list, with kind, strip number, and region count per row.
+- **Plugin chains** — every active strip's instrument and FX chain.
+- **Inventory** — every Audio Unit installed on this Mac (`auval -l` data), cross-referenced against the current project. A red banner warns about plug-ins the project references but you don't have installed; each installed AU shows version, signing authority (parsed from `codesign`), and any installed `.aupreset` files.
+- **Diagnostics** — phantom plug-ins (referenced from undo history but not on any active track), unresolved AUs, duplicate FX warnings.
+
+The file lands in `$TMPDIR/lpx-toolkit-<slug>.html` and opens in your default browser. Use the `◐` toggle for light/dark mode (persists across reloads).
 
 ### Library browser
 
@@ -112,6 +120,8 @@ Run `lpxtool --help` for the full flag list.
 lpxtool --serve                       # browse ~/Music/Logic
 lpxtool --serve --port 8080 ~/Music   # explicit port + directory
 ```
+
+The index lists every project as a card with a chip row showing key, BPM, track count, bundle size, and modified time. Type into the search box (or press `/` to focus it) to filter the list — the query persists across reloads.
 
 JSON endpoints are exposed for tooling: `/api/projects`, `/api/projects/<index>`, `/api/rollup`. Press `Ctrl-C` to stop the server.
 
@@ -149,7 +159,9 @@ You can also reach the rollup view via `--serve`: the library index links to `/r
 
 ## Privacy
 
-Everything runs locally. Your projects never leave your machine, and `auval` is the only external command invoked. There is no telemetry, network call, or upload of any kind.
+Everything runs locally. Your projects never leave your machine. The only external commands invoked are `auval -l` (to resolve plug-in display names) and `codesign -dv` (to read each AU's signing authority for the Inventory tab). There is no telemetry, network call, or upload of any kind.
+
+Cache files live under `~/.cache/lpx-toolkit/` (`auval.json`, `au-bundles.json`, `au-presets.json`, `index.json`). They are mtime-keyed and self-invalidating; delete the directory at any time to force a fresh scan.
 
 ## Contributing
 

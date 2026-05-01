@@ -680,3 +680,343 @@ def test_render_applies_persisted_theme_before_body(tmp_path):
     head_block = out[:head_end]
     assert "lpxtool-theme" in head_block
     assert "data-theme" in head_block
+
+
+# --- #42 auval inventory tab ---
+
+
+def _payload_with_inventory(inventory):
+    """Build a minimal payload carrying the supplied auval_inventory block."""
+    return {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 0,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [], "track_list": [], "vendors": {},
+        "diagnostics": [], "phantom_plugins": [],
+        "auval_inventory": inventory,
+    }
+
+
+def test_render_includes_inventory_tab():
+    """The Inventory tab is part of the tab strip whenever an inventory is
+    present — even an empty one (the tab itself is the surface for the
+    'no AUs detected' empty state)."""
+    payload = _payload_with_inventory({"entries": [], "unresolved": []})
+    out = render_project_html(payload)
+    assert 'data-tab="inventory"' in out
+    assert 'data-panel="inventory"' in out
+
+
+def test_render_inventory_tab_lists_each_entry():
+    inventory = {
+        "entries": [
+            {
+                "fingerprint": "aumu/EZk2/Toon",
+                "name": "EZkeys 2",
+                "manufacturer": "Toontrack",
+                "type": "Instrument",
+                "type_4cc": "aumu",
+                "subtype_4cc": "EZk2",
+                "manufacturer_4cc": "Toon",
+                "used_in_project": True,
+            },
+            {
+                "fingerprint": "aufx/EB  /SToy",
+                "name": "EchoBoy",
+                "manufacturer": "Soundtoys",
+                "type": "Effect",
+                "type_4cc": "aufx",
+                "subtype_4cc": "EB  ",
+                "manufacturer_4cc": "SToy",
+                "used_in_project": False,
+            },
+        ],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    assert "EZkeys 2" in out
+    assert "Toontrack" in out
+    assert "EchoBoy" in out
+    assert "Soundtoys" in out
+    assert "Instrument" in out
+    assert "Effect" in out
+
+
+def test_render_inventory_marks_used_vs_unused_distinctly():
+    """The 'used in project' column is the headline — a row that's used must
+    be visually distinct from a row that isn't, so the user can scan."""
+    inventory = {
+        "entries": [
+            {
+                "fingerprint": "aumu/EZk2/Toon",
+                "name": "EZkeys 2", "manufacturer": "Toontrack",
+                "type": "Instrument", "type_4cc": "aumu",
+                "subtype_4cc": "EZk2", "manufacturer_4cc": "Toon",
+                "used_in_project": True,
+            },
+            {
+                "fingerprint": "aumu/EZbs/Toon",
+                "name": "EZbass", "manufacturer": "Toontrack",
+                "type": "Instrument", "type_4cc": "aumu",
+                "subtype_4cc": "EZbs", "manufacturer_4cc": "Toon",
+                "used_in_project": False,
+            },
+        ],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    # Find the inventory panel block specifically — the test should not be
+    # fooled by markup elsewhere on the page.
+    panel_start = out.find('data-panel="inventory"')
+    panel_end = out.find('</section>', panel_start)
+    assert panel_start != -1
+    panel = out[panel_start:panel_end]
+    # Each row carries a `used` or `unused` class so the CSS can style
+    # them differently — same convention as the vendor drilldown.
+    assert "inv-row used" in panel
+    assert "inv-row unused" in panel
+
+
+def test_render_inventory_used_rows_have_distinct_row_styling():
+    """A ✓ in a single column is too subtle when there are 300+ rows.
+    Used rows must carry styling that paints the *whole row* — a tinted
+    background and an accent stripe — so they read at a glance."""
+    out = render_project_html(_payload_with_inventory(
+        {"entries": [], "unresolved": []}
+    ))
+    style_block = out[out.find("<style>"):out.find("</style>")]
+    # Locate the rule that targets the used row itself (not a descendant)
+    import re
+    rule_match = re.search(
+        r"\.inv-row\.used\s*\{[^}]*\}",
+        style_block,
+    )
+    assert rule_match is not None, ".inv-row.used rule must exist"
+    rule = rule_match.group(0)
+    assert "background" in rule, "used rows must paint a background colour"
+
+
+def test_render_inventory_tab_count_pill_matches_entry_count():
+    inventory = {
+        "entries": [
+            {"fingerprint": "aumu/A/Toon", "name": "A", "manufacturer": "T",
+             "type": "Instrument", "type_4cc": "aumu",
+             "subtype_4cc": "A", "manufacturer_4cc": "Toon",
+             "used_in_project": False},
+            {"fingerprint": "aumu/B/Toon", "name": "B", "manufacturer": "T",
+             "type": "Instrument", "type_4cc": "aumu",
+             "subtype_4cc": "B", "manufacturer_4cc": "Toon",
+             "used_in_project": False},
+            {"fingerprint": "aumu/C/Toon", "name": "C", "manufacturer": "T",
+             "type": "Instrument", "type_4cc": "aumu",
+             "subtype_4cc": "C", "manufacturer_4cc": "Toon",
+             "used_in_project": False},
+        ],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    # The tab label has a count pill — same convention as Tracks/Plugins/Diagnostics.
+    # Locate the inventory tab markup and check the pill content.
+    tab_start = out.find('data-tab="inventory"')
+    tab_end = out.find('</button>', tab_start)
+    tab_block = out[tab_start:tab_end]
+    assert "<span class=\"count\">3</span>" in tab_block
+
+
+def test_render_inventory_shows_unresolved_banner_when_missing():
+    """The headline pre-flight signal: this project references plugins
+    that are NOT in your local registry. Surface as a banner above the
+    inventory table — that's the whole reason the tab exists."""
+    inventory = {
+        "entries": [],  # nothing installed
+        "unresolved": [
+            {
+                "fingerprint": "aumu/Mssg/UNKN",
+                "display_name": "Mystery",
+                "type_4cc": "aumu",
+                "subtype_4cc": "Mssg",
+                "manufacturer_4cc": "UNKN",
+            },
+        ],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    panel_start = out.find('data-panel="inventory"')
+    panel_end = out.find('</section>', panel_start)
+    panel = out[panel_start:panel_end]
+    # Banner is a distinct block (different class from a normal row)
+    assert "inv-banner" in panel
+    # Banner names the missing plugin and its fingerprint
+    assert "Mystery" in panel
+    assert "aumu/Mssg/UNKN" in panel
+    # Number of missing plugins is highlighted
+    assert "1" in panel
+
+
+def test_render_inventory_omits_banner_when_nothing_missing():
+    """A clean project (every referenced plugin resolves) gets no banner —
+    the absence of the banner is itself the signal."""
+    inventory = {
+        "entries": [
+            {"fingerprint": "aumu/A/Toon", "name": "A", "manufacturer": "T",
+             "type": "Instrument", "type_4cc": "aumu",
+             "subtype_4cc": "A", "manufacturer_4cc": "Toon",
+             "used_in_project": True},
+        ],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    panel_start = out.find('data-panel="inventory"')
+    panel_end = out.find('</section>', panel_start)
+    panel = out[panel_start:panel_end]
+    assert "inv-banner" not in panel
+
+
+def test_render_inventory_empty_state_when_lookup_unavailable():
+    """No inventory entries AND no unresolved → empty state explaining why.
+    auval may be missing on the machine; the user shouldn't see a blank tab."""
+    inventory = {"entries": [], "unresolved": []}
+    out = render_project_html(_payload_with_inventory(inventory))
+    panel_start = out.find('data-panel="inventory"')
+    panel_end = out.find('</section>', panel_start)
+    panel = out[panel_start:panel_end]
+    assert "tab-empty" in panel
+
+
+def test_render_inventory_escapes_html_metacharacters():
+    """Plugin names occasionally contain <, >, & (e.g. 'CLA Guitars (m->s)').
+    They MUST be escaped — the document should never break."""
+    inventory = {
+        "entries": [
+            {"fingerprint": "aufx/CGTX/ksWV",
+             "name": "CLA Guitars (m->s)", "manufacturer": "Wave<s>",
+             "type": "Effect", "type_4cc": "aufx",
+             "subtype_4cc": "CGTX", "manufacturer_4cc": "ksWV",
+             "used_in_project": False},
+        ],
+        "unresolved": [
+            {"fingerprint": "aufx/X<x>/Y", "display_name": "<bad>",
+             "type_4cc": "aufx", "subtype_4cc": "X<x>", "manufacturer_4cc": "Y"},
+        ],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    assert "<bad>" not in out
+    assert "Wave<s>" not in out
+    assert "(m->s)" not in out
+    assert "&lt;bad&gt;" in out
+    assert "Wave&lt;s&gt;" in out
+    assert "(m-&gt;s)" in out
+
+
+def test_render_inventory_panel_starts_hidden():
+    """Tracks is the default-active tab; Inventory is hidden until clicked,
+    matching the existing tab convention."""
+    payload = _payload_with_inventory({"entries": [], "unresolved": []})
+    out = render_project_html(payload)
+    panel_start = out.find('data-panel="inventory"')
+    # The panel div carries `tab-panel hidden` (same as plugins / diagnostics).
+    surrounding = out[max(0, panel_start - 80):panel_start + 50]
+    assert "tab-panel hidden" in surrounding
+
+
+def test_render_inventory_shows_version_column():
+    """Each row displays the bundle's version when known."""
+    inventory = {
+        "entries": [{
+            "fingerprint": "aumu/EZk2/Toon",
+            "name": "EZkeys 2", "manufacturer": "Toontrack",
+            "type": "Instrument", "type_4cc": "aumu",
+            "subtype_4cc": "EZk2", "manufacturer_4cc": "Toon",
+            "used_in_project": True,
+            "version": "2.5.1", "signed_by": "Toontrack AB",
+            "preset_count": 0,
+        }],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    assert "2.5.1" in out
+
+
+def test_render_inventory_shows_signed_by_column():
+    inventory = {
+        "entries": [{
+            "fingerprint": "aumu/EZk2/Toon",
+            "name": "EZkeys 2", "manufacturer": "Toontrack",
+            "type": "Instrument", "type_4cc": "aumu",
+            "subtype_4cc": "EZk2", "manufacturer_4cc": "Toon",
+            "used_in_project": False,
+            "version": "2.5.1",
+            "signed_by": "Native Instruments GmbH",
+            "preset_count": 0,
+        }],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    assert "Native Instruments GmbH" in out
+
+
+def test_render_inventory_shows_preset_count_when_nonzero():
+    inventory = {
+        "entries": [{
+            "fingerprint": "aumu/Mass/NIns",
+            "name": "Massive", "manufacturer": "Native Instruments",
+            "type": "Instrument", "type_4cc": "aumu",
+            "subtype_4cc": "Mass", "manufacturer_4cc": "NIns",
+            "used_in_project": False,
+            "version": "1.5.5", "signed_by": "Native Instruments GmbH",
+            "preset_count": 247,
+        }],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    assert "247" in out
+
+
+def test_render_inventory_renders_em_dash_for_missing_metadata():
+    """An auval-known plugin with no matching bundle scan (or unsigned)
+    must render — for the missing fields, not crash or print 'None'."""
+    inventory = {
+        "entries": [{
+            "fingerprint": "aufx/X/Y",
+            "name": "MysteryFX", "manufacturer": "Mystery",
+            "type": "Effect", "type_4cc": "aufx",
+            "subtype_4cc": "X", "manufacturer_4cc": "Y",
+            "used_in_project": False,
+            "version": None, "signed_by": None, "preset_count": 0,
+        }],
+        "unresolved": [],
+    }
+    out = render_project_html(_payload_with_inventory(inventory))
+    panel_start = out.find('data-panel="inventory"')
+    panel_end = out.find('</section>', panel_start)
+    panel = out[panel_start:panel_end]
+    assert "None" not in panel
+    assert "&mdash;" in panel or "—" in panel
+
+
+def test_render_inventory_handles_payload_without_auval_inventory_key():
+    """Older payloads (pre-#42) don't carry the auval_inventory key. The
+    renderer must not crash — just omit the tab gracefully."""
+    payload = {
+        "schema_version": 1,
+        "project": {
+            "name": "x", "key": "C", "gender": "major", "bpm": 120.0,
+            "time_signature": "4/4", "track_count": 0,
+            "created_at": "2024-01-01T00:00:00",
+            "modified_at": "2024-01-01T00:00:00",
+            "sample_rate": 44100, "bundle_size_bytes": 0,
+            "audio_file_count": 0, "impulse_response_count": 0,
+            "frame_rate_index": 1, "frame_rate": 25.0,
+        },
+        "tracks": [], "track_list": [], "vendors": {},
+        "diagnostics": [], "phantom_plugins": [],
+    }
+    # Should not raise; should not include the inventory tab (no data to show).
+    out = render_project_html(payload)
+    assert 'data-tab="inventory"' not in out
