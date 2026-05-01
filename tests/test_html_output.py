@@ -387,14 +387,19 @@ def test_render_includes_reveal_in_finder_button(tmp_path):
     assert "Reveal in Finder" not in out_no_path
 
 
-def test_render_button_links_to_file_url_for_project_path(tmp_path):
-    """The button is a `file://` link to the project bundle so clicking
-    opens Finder at that location."""
+def test_render_button_links_to_parent_dir_for_project_path(tmp_path):
+    """In standalone --html (not served), the Reveal button points at
+    the bundle's parent folder via file:// — clicking opens Finder
+    showing the containing directory. (Pointing at the bundle itself
+    triggers Launch Services and launches Logic, which is the bug
+    we're avoiding.)"""
     info = parse_project(_make_minimal_bundle(tmp_path))
     payload = json.loads(project_to_json(info, lookup={}))
     project_path = "/absolute/path/to/song.logicx"
     out = render_project_html(payload, lookup={}, project_path=project_path)
-    assert f"file://{project_path}" in out
+    # Parent folder is reachable; bundle path itself is not.
+    assert "file:///absolute/path/to" in out
+    assert "file:///absolute/path/to/song.logicx" not in out
 
 
 def test_render_resolves_manufacturer_full_name_in_vendor_rollup():
@@ -998,6 +1003,37 @@ def test_render_inventory_renders_em_dash_for_missing_metadata():
     panel = out[panel_start:panel_end]
     assert "None" not in panel
     assert "&mdash;" in panel or "—" in panel
+
+
+def test_render_project_html_reveal_button_uses_server_endpoint_when_served():
+    """When served by --serve, the topbar Reveal button targets the
+    /reveal endpoint so the server can run `open -R` (file:// to a
+    .logicx bundle launches Logic, not Finder)."""
+    payload = _payload_with_inventory({"entries": [], "unresolved": []})
+    out = render_project_html(
+        payload, project_path="/Users/x/Music/song.logicx", served=True,
+    )
+    import urllib.parse
+    encoded = urllib.parse.quote("/Users/x/Music/song.logicx", safe="")
+    assert f"/reveal?path={encoded}" in out
+    # NEVER point at the bundle directly — that triggers Launch Services.
+    assert "file:///Users/x/Music/song.logicx" not in out
+    assert "file:////Users/x/Music/song.logicx" not in out
+
+
+def test_render_project_html_reveal_button_falls_back_to_parent_dir_when_standalone():
+    """Standalone --html (no server): /reveal doesn't exist, so the
+    button points at file://<parent_dir> — Finder opens the containing
+    folder. Better than launching Logic."""
+    payload = _payload_with_inventory({"entries": [], "unresolved": []})
+    out = render_project_html(
+        payload, project_path="/Users/x/Music/song.logicx",
+        # served defaults to False
+    )
+    # Parent directory link present; bundle link absent.
+    assert "file:///Users/x/Music" in out
+    # The path must NOT include the bundle itself (would launch Logic).
+    assert "file:///Users/x/Music/song.logicx" not in out
 
 
 def test_render_inventory_handles_payload_without_auval_inventory_key():

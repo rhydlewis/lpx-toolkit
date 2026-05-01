@@ -126,3 +126,21 @@ def test_rollup_html_omits_chips_when_metadata_absent(tmp_path):
     }
     out = _render_rollup_html(rollup, [p1])
     assert 'class="proj-chips"' not in out
+
+
+def test_rollup_html_card_has_reveal_in_finder_link(tmp_path):
+    """The rollup card matches the serve index — both surfaces ship a
+    reveal-in-Finder anchor pointing at the /reveal server endpoint."""
+    from lpx_inspect import _render_rollup_html
+    p1 = _make_minimal_bundle(tmp_path, "alpha")
+    rollup = {
+        "projects": [{"name": "alpha", "plugin_count": 0,
+                      "unique_fingerprints": 0}],
+        "fingerprints": {}, "vendors": {},
+    }
+    out = _render_rollup_html(rollup, [p1])
+    assert 'class="proj-reveal"' in out
+    assert 'href="/reveal?' in out
+    import urllib.parse
+    assert urllib.parse.quote(str(p1), safe="") in out
+    assert 'title="Reveal in Finder"' in out

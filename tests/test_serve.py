@@ -77,6 +77,74 @@ def test_list_projects_returns_sorted(tmp_path):
     assert [p.stem for p in found] == ["alpha", "mike", "zulu"]
 
 
+def test_list_projects_recurses_into_subfolders(tmp_path):
+    """Users organise their library by project / album / year. The scanner
+    must follow nested folders, not just top-level ones."""
+    _make_minimal_bundle(tmp_path, "top-level")
+    sub = tmp_path / "ProjectA"
+    sub.mkdir()
+    _make_minimal_bundle(sub, "nested")
+    deeper = tmp_path / "Albums" / "2024" / "Rough cuts"
+    deeper.mkdir(parents=True)
+    _make_minimal_bundle(deeper, "deeply-nested")
+    found = _list_projects(tmp_path)
+    assert sorted(p.stem for p in found) == [
+        "deeply-nested", "nested", "top-level",
+    ]
+
+
+def test_list_projects_does_not_descend_into_logicx_bundles(tmp_path):
+    """`.logicx` is itself a directory containing Alternatives/, Audio
+    Files/, etc. We must yield the bundle and stop — descending would
+    waste walk time and could surface internal-looking matches."""
+    bundle = _make_minimal_bundle(tmp_path, "outer")
+    # Plant a stray directory inside the bundle that *would* match if we
+    # descended (we don't expect Logic to ever do this, but the walker
+    # must be defensive).
+    (bundle / "Resources" / "dummy.logicx").mkdir(parents=True)
+    found = _list_projects(tmp_path)
+    assert [p.stem for p in found] == ["outer"]
+
+
+def test_list_projects_skips_hidden_directories(tmp_path):
+    """`.git`, `.Trash`, `.DS_Store-folders`, etc. should not be walked.
+    Otherwise serving from `~` would try to enumerate the user's whole
+    home tree."""
+    _make_minimal_bundle(tmp_path, "visible")
+    hidden = tmp_path / ".backup"
+    hidden.mkdir()
+    _make_minimal_bundle(hidden, "should-not-appear")
+    found = _list_projects(tmp_path)
+    assert [p.stem for p in found] == ["visible"]
+
+
+def test_list_projects_handles_symlink_loop(tmp_path):
+    """A symlink that points back into the tree must not cause infinite
+    descent. The walker skips symlinks entirely (simpler than tracking
+    visited inodes)."""
+    _make_minimal_bundle(tmp_path, "real")
+    loop = tmp_path / "loop"
+    loop.symlink_to(tmp_path)
+    # Must not hang; must return only the real project.
+    found = _list_projects(tmp_path)
+    assert [p.stem for p in found] == ["real"]
+
+
+def test_list_projects_recursive_output_is_sorted(tmp_path):
+    """Sort by full path (string comparison) so the order is stable
+    across runs and across nesting depths."""
+    _make_minimal_bundle(tmp_path / "Z" if False else tmp_path, "top-z")
+    _make_minimal_bundle(tmp_path, "top-a")
+    sub = tmp_path / "subdir"
+    sub.mkdir()
+    _make_minimal_bundle(sub, "sub-m")
+    found = _list_projects(tmp_path)
+    # Lexicographic by full path: top-a, sub-m, top-z (subdir ordering
+    # depends on the system but the key thing is determinism).
+    paths = [str(p) for p in found]
+    assert paths == sorted(paths)
+
+
 # --- _render_serve_index ---
 
 def test_render_serve_index_includes_project_names(tmp_path):
@@ -277,6 +345,90 @@ def test_render_serve_index_renders_em_dash_for_zero_size(tmp_path):
     assert "&mdash;" in panel or "—" in panel
 
 
+# --- reveal-in-Finder button on the card (top-right corner) ---
+
+
+def test_render_serve_index_card_carries_reveal_in_finder_link(tmp_path):
+    """Each card carries a reveal-in-Finder anchor pointing at the
+    server-side /reveal endpoint (file:// to a .logicx bundle launches
+    Logic via Launch Services — wrong; /reveal runs `open -R` which
+    actually reveals in Finder)."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    out = _render_serve_index(tmp_path, [project])
+    assert 'class="proj-reveal"' in out
+    # Server-side endpoint, not file:// to the bundle.
+    assert 'href="/reveal?' in out
+    assert "file://" + str(project) not in out
+    # Path travels in the query string, URL-encoded.
+    import urllib.parse
+    assert urllib.parse.quote(str(project), safe="") in out
+    # title attribute carries the affordance text for screen readers + tooltip
+    assert 'title="Reveal in Finder"' in out
+
+
+def test_render_serve_index_reveal_button_uses_folder_open_dot_icon(tmp_path):
+    """Lucide `folder-open-dot` SVG is embedded inline. Stroke is
+    `currentColor` so the icon flips with light/dark mode."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    out = _render_serve_index(tmp_path, [project])
+    # The reveal anchor wraps an SVG; the SVG carries one of the
+    # distinctive path fragments from folder-open-dot (the small dot
+    # inside the open folder is rendered as a <circle ... r="1"/>).
+    reveal_idx = out.find('class="proj-reveal"')
+    end_idx = out.find('</a>', reveal_idx)
+    button = out[reveal_idx:end_idx]
+    assert "<svg" in button
+    assert 'stroke="currentColor"' in button
+    assert 'r="1"' in button  # the "dot" part of the folder-open-dot icon
+
+
+def test_render_serve_index_card_navigation_link_separate_from_reveal(tmp_path):
+    """The project-page link and reveal-in-Finder link are independent
+    anchors — clicking the reveal must not navigate to /project/N."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    out = _render_serve_index(tmp_path, [project])
+    # Two distinct hrefs in the same card — `/project/0` for navigation,
+    # `/reveal?path=...` for the Finder action. Siblings, never nested.
+    proj_idx = out.find('href="/project/0"')
+    reveal_idx = out.find('href="/reveal?')
+    assert proj_idx != -1 and reveal_idx != -1
+    proj_close = out.find("</a>", proj_idx)
+    assert reveal_idx > proj_close, \
+        "reveal anchor must be a sibling of the navigation anchor"
+
+
+def test_render_serve_index_includes_reveal_click_handler(tmp_path):
+    """Inline JS intercepts clicks on .proj-reveal so the browser
+    doesn't navigate to /reveal — instead, fetch() pings the server
+    and the server runs `open -R`."""
+    project = _make_minimal_bundle(tmp_path, "song")
+    out = _render_serve_index(tmp_path, [project])
+    # The script must call fetch on the reveal href and prevent default.
+    assert "proj-reveal" in out
+    assert "preventDefault" in out
+    assert "fetch(" in out
+
+
+def test_render_serve_index_reveal_button_html_escapes_path(tmp_path):
+    """A bundle path containing odd characters must be safely escaped in
+    the file:// href and the title."""
+    weird = tmp_path / "song & co.logicx"
+    (weird / "Alternatives" / "000").mkdir(parents=True)
+    import plistlib
+    md = {
+        "SongKey": "C", "SongGenderKey": "major",
+        "BeatsPerMinute": 120.0,
+        "SongSignatureNumerator": 4, "SongSignatureDenominator": 4,
+        "NumberOfTracks": 0, "SampleRate": 44100,
+    }
+    (weird / "Alternatives" / "000" / "MetaData.plist").write_bytes(
+        plistlib.dumps(md))
+    (weird / "Alternatives" / "000" / "ProjectData").write_bytes(b"")
+    out = _render_serve_index(tmp_path, [weird])
+    assert "song & co" not in out  # raw '&' must be escaped
+    assert "song &amp; co" in out
+
+
 # --- HTTP handler ---
 
 @pytest.fixture
@@ -408,6 +560,92 @@ def test_serve_index_links_to_rollup(live_server):
     when they entered through `--serve` rather than `--rollup`."""
     _, _, body = _get(live_server, "/")
     assert 'href="/rollup"' in body
+
+
+# --- /reveal endpoint (Reveal in Finder) ---
+
+
+def test_serve_reveal_runs_open_dash_R_for_known_project(
+    monkeypatch, tmp_path,
+):
+    """The /reveal route runs `open -R <path>` for a path in the served
+    project list. We mock subprocess so the test doesn't actually open
+    Finder during the run."""
+    import urllib.parse
+
+    import lpx_inspect
+
+    bundle = _make_minimal_bundle(tmp_path, "alpha")
+    captured: list[list[str]] = []
+
+    def fake_run(cmd, **_kw):
+        captured.append(cmd)
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(lpx_inspect.subprocess, "run", fake_run)
+
+    httpd, port = start_serve(tmp_path, port=0, open_browser=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"/reveal?path={urllib.parse.quote(str(bundle), safe='')}"
+        status, _, _ = _get(port, url)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert status == 204
+    # The server invoked `open -R <bundle>` as the canonical reveal action.
+    assert any(cmd[:2] == ["open", "-R"] and str(bundle) in cmd
+               for cmd in captured), captured
+
+
+def test_serve_reveal_rejects_path_outside_served_list(
+    monkeypatch, tmp_path,
+):
+    """Security: /reveal must only accept paths in the server's project
+    list. Otherwise a malicious page could trick the browser into
+    running `open -R` against arbitrary system locations."""
+    import urllib.parse
+
+    import lpx_inspect
+
+    _make_minimal_bundle(tmp_path, "alpha")
+    fake_called = {"n": 0}
+
+    def fake_run(cmd, **_kw):
+        fake_called["n"] += 1
+        from types import SimpleNamespace
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(lpx_inspect.subprocess, "run", fake_run)
+
+    httpd, port = start_serve(tmp_path, port=0, open_browser=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"/reveal?path={urllib.parse.quote('/etc/passwd', safe='')}"
+        status, _, _ = _get(port, url)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert status == 403
+    assert fake_called["n"] == 0, "open -R must not have been invoked"
+
+
+def test_serve_reveal_rejects_missing_path_param(tmp_path):
+    """A bare /reveal with no `path=` query → 400."""
+    httpd, port = start_serve(tmp_path, port=0, open_browser=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _, _ = _get(port, "/reveal")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert status == 400
 
 
 # --- start_serve port selection ---

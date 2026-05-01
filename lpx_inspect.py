@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # Footer links — used by both the per-project dashboard and the library index.
 _REPO_URL = "https://github.com/rhydlewis/lpx-toolkit"
@@ -2106,7 +2106,36 @@ _LUCIDE = {
         '<line x1="10" x2="10.01" y1="16" y2="16"/>'
         '</svg>'
     ),
+    "folder-open-dot": (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        '<path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5'
+        'l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9'
+        'a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2"/>'
+        '<circle cx="14" cy="15" r="1"/>'
+        '</svg>'
+    ),
 }
+
+
+# Click handler for `.proj-reveal` anchors. The href is `/reveal?path=...`;
+# we intercept the click, prevent default navigation, and `fetch` the
+# endpoint instead — the server runs `open -R` and Finder comes forward.
+# Shared between the serve index and the rollup HTML view.
+_REVEAL_CLICK_SCRIPT = (
+    '<script>(function(){'
+    "document.body.addEventListener('click',function(e){"
+    "var a=e.target.closest&&e.target.closest('a.proj-reveal');"
+    "if(!a)return;"
+    # Only intercept the server-side /reveal URL — `file://<parent>`
+    # fallbacks (used in standalone --html mode) must navigate normally
+    # so Finder opens the parent folder.
+    "var href=a.getAttribute('href')||'';"
+    "if(href.indexOf('/reveal')!==0)return;"
+    "e.preventDefault();e.stopPropagation();"
+    "fetch(href,{method:'GET'}).catch(function(){});"
+    '});})();</script>'
+)
 
 
 def _relative_time(then: datetime, now: datetime | None = None) -> str:
@@ -2581,16 +2610,34 @@ def _render_footer(suffix: str = "") -> str:
     )
 
 
-def _render_open_bar(project_path: str | None) -> str:
-    """Reveal-in-Finder button (file:// link to the project bundle).
-    Empty when no path is supplied. Rendered into the fixed topbar
-    next to the theme toggle.
+def _render_open_bar(project_path: str | None, served: bool = False) -> str:
+    """Reveal-in-Finder button rendered into the fixed topbar.
+
+    `file://<bundle>` would launch Logic via Launch Services, not reveal
+    the bundle in Finder. Two modes:
+
+    - `served=True` (--serve mode): point at the `/reveal?path=...`
+      server endpoint. The shared inline JS click-handler intercepts,
+      fetches the URL, and the server runs `open -R <path>`.
+    - `served=False` (standalone --html): `/reveal` doesn't exist, so
+      fall back to `file://<parent_dir>`. Finder opens the *containing*
+      folder; the user has to spot the bundle, but it's better than
+      launching Logic.
+
+    Empty string when no path is supplied.
     """
     if not project_path:
         return ""
-    file_url = f"file://{project_path}"
+    if served:
+        href = "/reveal?path=" + urllib.parse.quote(project_path, safe="")
+    else:
+        # Open the bundle's *parent* folder. Bundles end in `.logicx` —
+        # `Path(project_path).parent` is the directory we want.
+        parent = str(Path(project_path).parent)
+        href = f"file://{parent}"
     return (
-        f'<a class="open-btn" href="{_e(file_url)}">Reveal in Finder</a>'
+        f'<a class="open-btn proj-reveal" href="{_e(href)}" '
+        f'title="Reveal in Finder">Reveal in Finder</a>'
     )
 
 
@@ -2598,6 +2645,7 @@ def render_project_html(
     payload: dict,
     lookup: dict[str, str] | None = None,
     project_path: str | None = None,
+    served: bool = False,
 ) -> str:
     """Render a JSON payload (from `project_to_json`) to a self-contained
     HTML dashboard styled to match `inspector-mockup.html`.
@@ -2606,8 +2654,13 @@ def render_project_html(
     manufacturer row becomes expandable and shows used + unused plugins
     from that vendor.
 
-    Optional `project_path` adds a header "Open in Logic" button that
-    copies a `open -a "Logic Pro" <path>` shell command to the clipboard.
+    Optional `project_path` adds a topbar "Reveal in Finder" button.
+
+    `served=True` indicates the page is being served by the local HTTP
+    server, so the reveal button can target `/reveal?path=...` (server
+    runs `open -R`). When `False` (standalone --html), the reveal button
+    falls back to `file://<parent_dir>` which opens the containing
+    folder in Finder.
     """
     p = payload.get("project", {})
     project_name = p.get("name", "Untitled")
@@ -2622,7 +2675,7 @@ def render_project_html(
     )
     phantoms_html = _render_phantoms(payload.get("phantom_plugins", []))
     diagnostics_html = _render_diagnostics(payload.get("diagnostics", []))
-    open_bar_html = _render_open_bar(project_path)
+    open_bar_html = _render_open_bar(project_path, served=served)
 
     track_count = p.get("track_count", 0)
     plugin_count = sum(payload.get("vendors", {}).values())
@@ -2767,6 +2820,7 @@ def render_project_html(
         f'</div>'
         f'{_render_footer()}'
         f'{behaviour_script}'
+        f'{_REVEAL_CLICK_SCRIPT}'
         f'</body></html>\n'
     )
 
@@ -3426,16 +3480,39 @@ _SERVE_INDEX_STYLE = """
   display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px; max-width: 1400px; margin: 0 auto;
 }
-a.proj-card {
+.proj-card {
   display: block; padding: 20px 22px;
   border: 1px solid var(--line); background: var(--ink-2);
   border-radius: 10px;
-  text-decoration: none; color: var(--bone);
+  position: relative;  /* anchor for the .proj-reveal corner button */
   transition: background-color .15s, border-color .15s, transform .15s;
 }
-a.proj-card:hover {
+.proj-card:hover {
   background: var(--ink-3); border-color: var(--amber-dim);
   transform: translateY(-1px);
+}
+a.proj-card-link {
+  display: block; text-decoration: none;
+  color: var(--bone);
+  /* Leave room for the absolute-positioned reveal button so long names
+     don't run under it. */
+  padding-right: 32px;
+}
+a.proj-card-link:visited { color: var(--bone); }
+a.proj-reveal {
+  position: absolute; top: 12px; right: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 999px;
+  color: var(--grey-2); background: transparent;
+  text-decoration: none;
+  transition: background-color .15s, color .15s;
+}
+a.proj-reveal:hover {
+  color: var(--amber); background: var(--ink-4);
+}
+a.proj-reveal svg {
+  width: 16px; height: 16px; stroke-width: 2;
 }
 .proj-card .proj-name {
   font-family: var(--font-display);
@@ -3566,19 +3643,45 @@ def _expand_rollup_paths(paths: list[str]) -> list[Path]:
 
 
 def _list_projects(directory: Path) -> list[Path]:
-    """Sorted list of .logicx bundles directly inside `directory`.
+    """Sorted list of .logicx bundles anywhere under `directory`.
 
-    Non-recursive — Logic doesn't nest projects, and recursing risks
-    walking into unrelated trees. Returns [] for missing directories
-    (so the index page can still render a sensible empty state).
+    Walks the tree but never descends into a `.logicx` bundle (it's a
+    directory containing Alternatives/Audio Files/etc., not user
+    content), skips dot-prefixed directories (`.git`, `.Trash`, …) so
+    serving from `~` doesn't enumerate the whole home tree, and skips
+    symlinks (avoid infinite loops without tracking visited inodes).
+
+    Returns [] for missing roots so the index renders a sensible empty
+    state.
     """
     directory = Path(directory)
     if not directory.is_dir():
         return []
-    return sorted(
-        p for p in directory.iterdir()
-        if p.is_dir() and p.suffix == ".logicx"
-    )
+
+    found: list[Path] = []
+    stack: list[Path] = [directory]
+    while stack:
+        current = stack.pop()
+        try:
+            children = list(current.iterdir())
+        except (PermissionError, OSError):
+            continue
+        for child in children:
+            # Treat symlinks as opaque — never follow them, regardless of
+            # what they point at. Cheaper and safer than visited-set tracking.
+            if child.is_symlink():
+                continue
+            if not child.is_dir():
+                continue
+            if child.name.startswith("."):
+                continue
+            if child.suffix == ".logicx":
+                # Yield the bundle; do not descend into its internals.
+                found.append(child)
+                continue
+            stack.append(child)
+    found.sort(key=str)
+    return found
 
 
 def _render_proj_chips(meta: dict | None) -> str:
@@ -3695,13 +3798,22 @@ def _render_serve_index(
 
         def _card(i: int, p: Path) -> str:
             chip_row = _render_proj_chips(meta_lookup.get(str(p)))
+            reveal_url = (
+                "/reveal?path="
+                + urllib.parse.quote(str(p), safe="")
+            )
             return (
-                f'<a class="proj-card" href="/project/{i}" '
-                f'data-search="{_e(p.stem.lower())}">'
+                f'<div class="proj-card" data-search="{_e(p.stem.lower())}">'
+                f'<a class="proj-card-link" href="/project/{i}">'
                 f'<div class="proj-name">{_e(p.stem)}</div>'
                 f'<div class="proj-path">{_e(str(p))}</div>'
                 f'{chip_row}'
                 f'</a>'
+                f'<a class="proj-reveal" href="{_e(reveal_url)}" '
+                f'title="Reveal in Finder" aria-label="Reveal in Finder">'
+                f'{_LUCIDE["folder-open-dot"]}'
+                f'</a>'
+                f'</div>'
             )
         cards = "".join(_card(i, p) for i, p in enumerate(projects))
         body = (
@@ -3808,6 +3920,7 @@ def _render_serve_index(
         f'{_render_footer(suffix="serving locally")}'
         f'{toggle_script}'
         f'{filter_script}'
+        f'{_REVEAL_CLICK_SCRIPT}'
         '</body></html>\n'
     )
 
@@ -3940,8 +4053,13 @@ def _render_rollup_html(
         plugin_count = summary.get("plugin_count", 0)
         unique = summary.get("unique_fingerprints", 0)
         chip_row = _render_proj_chips(meta_lookup.get(str(p)))
+        reveal_url = (
+            "/reveal?path="
+            + urllib.parse.quote(str(p), safe="")
+        )
         project_cards.append(
-            f'<a class="proj-card" href="/project/{i}">'
+            f'<div class="proj-card">'
+            f'<a class="proj-card-link" href="/project/{i}">'
             f'<div class="proj-name">{_e(p.stem)}</div>'
             f'<div class="proj-meta">'
             f'{plugin_count} plug-in{"s" if plugin_count != 1 else ""}'
@@ -3949,6 +4067,11 @@ def _render_rollup_html(
             f'</div>'
             f'{chip_row}'
             f'</a>'
+            f'<a class="proj-reveal" href="{_e(reveal_url)}" '
+            f'title="Reveal in Finder" aria-label="Reveal in Finder">'
+            f'{_LUCIDE["folder-open-dot"]}'
+            f'</a>'
+            f'</div>'
         )
 
     n_unique_plugins = len(fingerprints)
@@ -4007,6 +4130,7 @@ def _render_rollup_html(
         f'<div class="rollup-projects">{"".join(project_cards)}</div>'
         f'{_render_footer(suffix="rollup view")}'
         f'{toggle_script}'
+        f'{_REVEAL_CLICK_SCRIPT}'
         '</body></html>\n'
     )
 
@@ -4038,7 +4162,8 @@ def make_serve_handler(project_provider, *, label: str = ""):
             return
 
         def do_GET(self):  # noqa: N802 — required name
-            route = urllib.parse.urlparse(self.path).path
+            parsed = urllib.parse.urlparse(self.path)
+            route = parsed.path
 
             if route == "/":
                 projects = project_provider()
@@ -4047,6 +4172,30 @@ def make_serve_handler(project_provider, *, label: str = ""):
                     200, "text/html",
                     _render_serve_index(label, projects, metadata=metadata),
                 )
+                return
+
+            # Reveal-in-Finder: validates the path is in the served list,
+            # then runs `open -R` server-side. Returns 204 (no content)
+            # so the inline JS fetch completes silently — the side effect
+            # is Finder coming forward and selecting the bundle.
+            if route == "/reveal":
+                params = urllib.parse.parse_qs(parsed.query)
+                target = (params.get("path") or [None])[0]
+                if not target:
+                    self._send(400, "text/plain", "missing path\n")
+                    return
+                allowed = {str(p) for p in project_provider()}
+                if target not in allowed:
+                    self._send(403, "text/plain", "path not served\n")
+                    return
+                try:
+                    subprocess.run(
+                        ["open", "-R", target],
+                        check=False, timeout=5,
+                    )
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+                self._send(204, "text/plain", "")
                 return
 
             if route == "/rollup":
@@ -4097,7 +4246,9 @@ def make_serve_handler(project_provider, *, label: str = ""):
                             bundles=bundles, presets=presets,
                         ))
                         html = render_project_html(
-                            payload, lookup=lookup, project_path=str(project_path)
+                            payload, lookup=lookup,
+                            project_path=str(project_path),
+                            served=True,
                         )
                     except (FileNotFoundError, KeyError, ValueError) as exc:
                         self._send(
